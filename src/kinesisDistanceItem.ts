@@ -28,7 +28,6 @@ class KinesisDistanceItem {
 
     this.element = element;
 
-    // Updated options to include interactionType instead of velocity
     this.options = {
       active: options.active !== undefined ? options.active : true,
       strength: options.strength !== undefined ? options.strength : 20,
@@ -154,11 +153,9 @@ class KinesisDistanceItem {
               const translateY = -directionY * this.options.strength * factor;
               transformValue = `translate(${translateX}px, ${translateY}px)`;
             } else {
-              console.log("distance", distance);
               const translateX = directionX * this.options.strength * factor;
               const translateY = directionY * this.options.strength * factor;
               transformValue = `translate(${translateX}px, ${translateY}px)`;
-              console.log("transformValue", transformValue);
             }
             break;
 
