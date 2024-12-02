@@ -15,9 +15,8 @@ class KinesisDistanceItem {
   private animationId: number | null = null;
   private duration: number;
   private easing: string;
-  private readonly MIN_DISTANCE: number = 0;
-  private readonly TRANSFORM_THRESHOLD: number = 10;
-  private readonly STICKING_THRESHOLD: number = 5;
+  private readonly MIN_DISTANCE: number = 0.0001; // Avoid division by zero
+  private minimumDistance: number;
 
   constructor(element: HTMLElement, options: KinesisDistanceItemOptions = {}) {
     if (!element.hasAttribute("data-kinesisdistance-item")) {
@@ -58,6 +57,12 @@ class KinesisDistanceItem {
       "cubic-bezier(0.23, 1, 0.32, 1)";
 
     this.isActive = this.options.active;
+
+    // Get the minimumDistance from data attribute or default to 5
+    this.minimumDistance = parseInt(
+      element.getAttribute("data-ks-min-distance") || "5",
+      10
+    );
 
     const computedStyle = window.getComputedStyle(this.element);
     this.initialTransform =
@@ -100,9 +105,7 @@ class KinesisDistanceItem {
 
     switch (interactionType) {
       case "linear":
-        return 1 - normalizedDistance;
       case "attraction":
-        return 1 - normalizedDistance;
       case "repulsion":
         return 1 - normalizedDistance;
       default:
@@ -112,13 +115,12 @@ class KinesisDistanceItem {
 
   private applyTransform() {
     const distance = this.calculateDistance();
-    const { transformType, interactionType, startDistance } = this.options;
+    const { transformType, interactionType } = this.options;
 
-    if (
-      transformType === "translate" &&
-      interactionType === "attraction" &&
-      distance <= this.STICKING_THRESHOLD
-    ) {
+    if (distance < this.options.startDistance) {
+      let factor = this.getInteractionFactor(distance);
+      let transformValue = "";
+
       const rect = this.element.getBoundingClientRect();
       const elementX = rect.left + rect.width / 2;
       const elementY = rect.top + rect.height / 2;
@@ -126,84 +128,84 @@ class KinesisDistanceItem {
       const dx = this.mouseX - elementX;
       const dy = this.mouseY - elementY;
 
-      const transformValue = `translate(${dx}px, ${dy}px)`;
+      const distanceNonZero = Math.max(distance, this.MIN_DISTANCE);
+      const directionX = dx / distanceNonZero;
+      const directionY = dy / distanceNonZero;
+
+      switch (transformType) {
+        case "translate":
+          let translateX = 0;
+          let translateY = 0;
+
+          if (interactionType === "repulsion") {
+            // Repulsion logic remains the same
+            const movement = this.options.strength * factor;
+            translateX = -directionX * movement;
+            translateY = -directionY * movement;
+          } else {
+            // Attraction with minimum distance
+            if (distance > this.minimumDistance) {
+              // Calculate desired movement amount
+              const movement = Math.min(
+                this.options.strength * factor,
+                distance - this.minimumDistance
+              );
+              translateX = directionX * movement;
+              translateY = directionY * movement;
+            } else {
+              // If within minimum distance, no movement
+              translateX = 0;
+              translateY = 0;
+            }
+          }
+
+          transformValue = `translate(${translateX}px, ${translateY}px)`;
+          break;
+
+        case "rotate":
+          let rotateAngle = (Math.atan2(dy, dx) * 180) / Math.PI;
+
+          if (interactionType === "repulsion") {
+            rotateAngle += 180;
+          }
+
+          rotateAngle = ((rotateAngle % 360) + 360) % 360;
+
+          const targetAngle = rotateAngle;
+          const currentTransform = this.initialTransform;
+          let currentAngle = 0;
+
+          const match = currentTransform.match(/rotate\(([-\d.]+)deg\)/);
+          if (match) {
+            currentAngle = parseFloat(match[1]);
+          }
+
+          let deltaAngle = targetAngle - currentAngle;
+          deltaAngle = ((deltaAngle + 180) % 360) - 180;
+
+          rotateAngle = currentAngle + deltaAngle * factor;
+
+          transformValue = `rotate(${rotateAngle}deg)`;
+          break;
+
+        case "scale":
+          if (interactionType === "repulsion") {
+            const scaleFactor = 1 - (this.options.strength / 100) * factor;
+            transformValue = `scale(${scaleFactor})`;
+          } else {
+            const scaleFactor = 1 + (this.options.strength / 100) * factor;
+            transformValue = `scale(${scaleFactor})`;
+          }
+          break;
+
+        default:
+          break;
+      }
 
       this.element.style.transform =
         `${this.initialTransform} ${transformValue}`.trim();
     } else {
-      if (distance < this.options.startDistance) {
-        const factor = this.getInteractionFactor(distance);
-        let transformValue = "";
-
-        const rect = this.element.getBoundingClientRect();
-        const elementX = rect.left + rect.width / 2;
-        const elementY = rect.top + rect.height / 2;
-
-        const dx = this.mouseX - elementX;
-        const dy = this.mouseY - elementY;
-
-        const distanceNonZero = Math.max(distance, this.MIN_DISTANCE);
-        const directionX = dx / distanceNonZero;
-        const directionY = dy / distanceNonZero;
-
-        switch (transformType) {
-          case "translate":
-            if (interactionType === "repulsion") {
-              const translateX = -directionX * this.options.strength * factor;
-              const translateY = -directionY * this.options.strength * factor;
-              transformValue = `translate(${translateX}px, ${translateY}px)`;
-            } else {
-              const translateX = directionX * this.options.strength * factor;
-              const translateY = directionY * this.options.strength * factor;
-              transformValue = `translate(${translateX}px, ${translateY}px)`;
-            }
-            break;
-
-          case "rotate":
-            let rotateAngle = (Math.atan2(dy, dx) * 180) / Math.PI;
-
-            if (interactionType === "repulsion") {
-              rotateAngle += 180;
-            }
-
-            rotateAngle = ((rotateAngle % 360) + 360) % 360;
-
-            const targetAngle = rotateAngle;
-            const currentTransform = this.initialTransform;
-            let currentAngle = 0;
-
-            const match = currentTransform.match(/rotate\(([-\d.]+)deg\)/);
-            if (match) {
-              currentAngle = parseFloat(match[1]);
-            }
-
-            let deltaAngle = targetAngle - currentAngle;
-            deltaAngle = ((deltaAngle + 180) % 360) - 180;
-
-            rotateAngle = currentAngle + deltaAngle * factor;
-
-            transformValue = `rotate(${rotateAngle}deg)`;
-            break;
-
-          case "scale":
-            if (interactionType === "repulsion") {
-              const scaleFactor = 1 - (this.options.strength / 100) * factor;
-              transformValue = `scale(${scaleFactor})`;
-            } else {
-              const scaleFactor = 1 + (this.options.strength / 100) * factor;
-              transformValue = `scale(${scaleFactor})`;
-            }
-            break;
-
-          default:
-            break;
-        }
-
-        this.element.style.transform =
-          `${this.initialTransform} ${transformValue}`.trim();
-      } else {
-        this.element.style.transform = this.initialTransform;
-      }
+      this.element.style.transform = this.initialTransform;
     }
   }
 
