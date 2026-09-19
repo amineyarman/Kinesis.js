@@ -221,12 +221,19 @@ function createHandle(element: HTMLElement, runtime: ScopeRuntime): MotionHandle
   }
 }
 
-const windowHub = {
+const kernel = {
   members: new Set<ScopeRuntime>(),
+  awake: new Set<ScopeRuntime>(),
+  byRoot: new WeakMap<Element, ScopeRuntime>(),
   hooked: false,
+  ticking: false,
+  frame: 0,
   scrollRaf: 0,
+  io: undefined as IntersectionObserver | undefined,
   add(scope: ScopeRuntime) {
     this.members.add(scope)
+    this.byRoot.set(scope.root, scope)
+    this.io?.observe(scope.root)
     if (this.hooked) return
     this.hooked = true
     window.addEventListener("scroll", this.scroll, { passive: true })
@@ -235,15 +242,28 @@ const windowHub = {
     window.addEventListener("pointerup", this.press, { passive: true })
     window.addEventListener("pointercancel", this.press, { passive: true })
     window.addEventListener("deviceorientation", this.orient)
+    if (typeof IntersectionObserver !== "undefined") {
+      this.io = new IntersectionObserver(this.intersect, { rootMargin: "40% 0px", threshold: 0 })
+      this.io.observe(scope.root)
+    }
   },
   remove(scope: ScopeRuntime) {
     this.members.delete(scope)
+    this.awake.delete(scope)
+    this.byRoot.delete(scope.root)
+    this.io?.unobserve(scope.root)
     if (this.members.size || !this.hooked) return
     this.hooked = false
     if (this.scrollRaf) {
       window.cancelAnimationFrame(this.scrollRaf)
       this.scrollRaf = 0
     }
+    if (this.frame) {
+      window.cancelAnimationFrame(this.frame)
+      this.frame = 0
+    }
+    this.io?.disconnect()
+    this.io = undefined
     window.removeEventListener("scroll", this.scroll)
     window.removeEventListener("resize", this.resize)
     window.removeEventListener("pointerdown", this.press)
@@ -251,25 +271,61 @@ const windowHub = {
     window.removeEventListener("pointercancel", this.press)
     window.removeEventListener("deviceorientation", this.orient)
   },
+  wake(scope: ScopeRuntime) {
+    if (!scope.canWake()) return
+    if (!this.awake.has(scope)) {
+      scope.rewindClock()
+      this.awake.add(scope)
+    }
+    if (this.frame || this.ticking) return
+    this.frame = window.requestAnimationFrame(this.tick)
+  },
+  sleep(scope: ScopeRuntime) {
+    this.awake.delete(scope)
+    if (this.awake.size || !this.frame) return
+    window.cancelAnimationFrame(this.frame)
+    this.frame = 0
+  },
+  tick(time: number) {
+    kernel.ticking = true
+    const living = Array.from(kernel.awake)
+    for (let index = 0; index < living.length; index += 1) living[index]?.prepareFrame(time)
+    let live = false
+    for (let index = 0; index < living.length; index += 1) {
+      const scope = living[index]
+      if (!scope) continue
+      if (scope.commitFrame()) live = true
+      else kernel.awake.delete(scope)
+    }
+    kernel.ticking = false
+    kernel.frame = live ? window.requestAnimationFrame(kernel.tick) : 0
+  },
+  intersect(entries: IntersectionObserverEntry[]) {
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index]
+      if (!entry) continue
+      kernel.byRoot.get(entry.target)?.setVisible(entry.isIntersecting)
+    }
+  },
   scroll() {
-    if (windowHub.scrollRaf) return
-    windowHub.scrollRaf = window.requestAnimationFrame(windowHub.flushScroll)
+    if (kernel.scrollRaf) return
+    kernel.scrollRaf = window.requestAnimationFrame(kernel.flushScroll)
   },
   flushScroll() {
-    windowHub.scrollRaf = 0
+    kernel.scrollRaf = 0
     const now = performance.now()
     const x = window.scrollX || 0
     const y = window.scrollY || 0
-    windowHub.members.forEach((scope) => scope.handleWindowScroll(now, x, y))
+    kernel.members.forEach((scope) => scope.handleWindowScroll(now, x, y))
   },
   resize() {
-    windowHub.members.forEach((scope) => scope.handleWindowResize())
+    kernel.members.forEach((scope) => scope.handleWindowResize())
   },
   press(event: Event) {
-    windowHub.members.forEach((scope) => scope.handleWindowPress(event as PointerEvent))
+    kernel.members.forEach((scope) => scope.handleWindowPress(event as PointerEvent))
   },
   orient(event: Event) {
-    windowHub.members.forEach((scope) => scope.handleWindowOrient(event as DeviceOrientationEvent))
+    kernel.members.forEach((scope) => scope.handleWindowOrient(event as DeviceOrientationEvent))
   },
 }
 
@@ -300,6 +356,7 @@ class ScopeRuntime implements KinesisScope {
   private sceneRx = new Spring(180, 22, 1)
   private sceneRy = new Spring(180, 22, 1)
   private lastSceneTransform = ""
+  private pendingScene = ""
   private sceneEl: HTMLElement | undefined
   private sceneMotion = ""
   private scrollDriven = false
@@ -309,8 +366,10 @@ class ScopeRuntime implements KinesisScope {
   private layoutScroll = false
   private pointerScratch: PointerState = { x: 0, y: 0, nx: 0, ny: 0 }
   private delayedScratch: PointerState = { x: 0, y: 0, nx: 0, ny: 0 }
-  private frame = 0
   private lastTime = 0
+  private pendingLive = false
+  private visible = true
+  private snapOnShow = false
   private paused = false
   private destroyed = false
   private dirty = true
@@ -428,8 +487,8 @@ class ScopeRuntime implements KinesisScope {
       })
     }
 
-    windowHub.add(this)
-    this.unbind.push(() => windowHub.remove(this))
+    kernel.add(this)
+    this.unbind.push(() => kernel.remove(this))
     if (typeof ResizeObserver !== "undefined") {
       const resizeObserver = new ResizeObserver(() => {
         this.layoutDirty = true
@@ -457,6 +516,26 @@ class ScopeRuntime implements KinesisScope {
     this.captureScroll(now, x, y)
     this.layoutScroll = true
     if (this.scrollDriven) this.kick()
+  }
+
+  canWake(): boolean {
+    return !this.destroyed && !this.paused && this.visible
+  }
+
+  rewindClock(): void {
+    this.lastTime = 0
+  }
+
+  setVisible(next: boolean): void {
+    if (this.visible === next) return
+    this.visible = next
+    if (next) {
+      this.layoutDirty = true
+      this.snapOnShow = this.scrollDriven
+      this.kick()
+      return
+    }
+    kernel.sleep(this)
   }
 
   handleWindowResize(): void {
@@ -638,9 +717,10 @@ class ScopeRuntime implements KinesisScope {
     this.measuredScrollY = window.scrollY || 0
   }
 
-  private applyScene(dt: number, reduce: boolean): boolean {
+  private simulateScene(dt: number, reduce: boolean, snap = false): boolean {
     const scene = this.sceneNode()
     if (!this.hasDepthScene() && scene === this.root) {
+      this.pendingScene = ""
       return false
     }
     const config = this.scopeConfig ?? this.readScopeConfig()
@@ -665,7 +745,7 @@ class ScopeRuntime implements KinesisScope {
     this.sceneRx.target = reduce ? 0 : -ny * tiltX * config.intensity
     this.sceneRy.target = reduce ? 0 : nx * tiltY * config.intensity
     let active = false
-    if (config.motion === "instant" || reduce) {
+    if (config.motion === "instant" || reduce || snap) {
       this.sceneRx.value = this.sceneRx.target
       this.sceneRy.value = this.sceneRy.target
       this.sceneRx.velocity = 0
@@ -674,12 +754,14 @@ class ScopeRuntime implements KinesisScope {
       if (this.sceneRx.step(dt)) active = true
       if (this.sceneRy.step(dt)) active = true
     }
-    const transform = `rotateX(${this.sceneRx.value.toFixed(3)}deg) rotateY(${this.sceneRy.value.toFixed(3)}deg)`
-    if (transform !== this.lastSceneTransform) {
-      scene.style.transform = transform
-      this.lastSceneTransform = transform
-    }
+    this.pendingScene = `rotateX(${this.sceneRx.value.toFixed(3)}deg) rotateY(${this.sceneRy.value.toFixed(3)}deg)`
     return active
+  }
+
+  private commitScene(): void {
+    if (!this.pendingScene || this.pendingScene === this.lastSceneTransform) return
+    this.sceneNode().style.transform = this.pendingScene
+    this.lastSceneTransform = this.pendingScene
   }
 
   private owns(node: Element): boolean {
@@ -716,10 +798,14 @@ class ScopeRuntime implements KinesisScope {
     this.rememberSources()
   }
 
-  private tick = (time: number) => {
-    if (this.destroyed || this.paused) return
+  prepareFrame(time: number): void {
+    this.pendingLive = false
+    this.pendingScene = ""
+    if (!this.canWake()) return
     const dt = this.lastTime ? Math.min(0.05, (time - this.lastTime) / 1000) : 1 / 60
     this.lastTime = time
+    const snap = this.snapOnShow
+    this.snapOnShow = false
     if (this.dirty) {
       this.scan()
       this.applyScopeFrame()
@@ -739,7 +825,7 @@ class ScopeRuntime implements KinesisScope {
     }
     const scopeConfig = this.scopeConfig ?? this.readScopeConfig()
     const reduceScene = shouldReduceMotion(scopeConfig, this.systemReduce)
-    if (this.applyScene(dt, reduceScene)) active = true
+    if (this.simulateScene(dt, reduceScene, snap)) active = true
     const rootProgress = this.scrollDriven ? this.scrollProgress(this.root) : 0
     this.targets.forEach((target) => {
       if (target.paused) return
@@ -757,7 +843,7 @@ class ScopeRuntime implements KinesisScope {
       const culled = target.outsideProximity(pointer)
       if (culled && !target.busy) return
       if (culled) {
-        if (target.apply(restOutput(target.scratch), dt, reduce)) active = true
+        if (target.simulate(restOutput(target.scratch), dt, reduce, snap)) active = true
         return
       }
       const delayed = config.trail > 0 ? this.pointerAt(config.trail * 100) : undefined
@@ -783,7 +869,7 @@ class ScopeRuntime implements KinesisScope {
         delayed,
         target.scratch,
       )
-      if (target.apply(output, dt, reduce)) active = true
+      if (target.simulate(output, dt, reduce, snap)) active = true
     })
     if (this.scrollDriven) {
       if (Math.abs(rootProgress - this.lastViewProgress) > 0.0008) active = true
@@ -795,13 +881,18 @@ class ScopeRuntime implements KinesisScope {
     this.velocity.y *= 0.86
     this.scrollState.velocity *= 0.86
     if (Math.hypot(this.velocity.x, this.velocity.y) > 0.4) active = true
-    this.frame = active ? window.requestAnimationFrame(this.tick) : 0
+    this.pendingLive = active
+  }
+
+  commitFrame(): boolean {
+    if (!this.canWake()) return false
+    this.commitScene()
+    this.targets.forEach((target) => target.commit())
+    return this.pendingLive
   }
 
   private kick(): void {
-    if (this.destroyed || this.paused || this.frame) return
-    this.lastTime = 0
-    this.frame = window.requestAnimationFrame(this.tick)
+    kernel.wake(this)
   }
 
   dropTarget(element: HTMLElement): void {
@@ -950,8 +1041,7 @@ class ScopeRuntime implements KinesisScope {
 
   pause(): void {
     this.paused = true
-    if (this.frame) window.cancelAnimationFrame(this.frame)
-    this.frame = 0
+    kernel.sleep(this)
   }
 
   resume(): void {
@@ -961,7 +1051,8 @@ class ScopeRuntime implements KinesisScope {
 
   destroy(): void {
     this.destroyed = true
-    this.pause()
+    this.paused = true
+    kernel.remove(this)
     this.unbind.forEach((fn) => fn())
     this.targets.forEach((target) => target.destroy())
     this.targets.clear()

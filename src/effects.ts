@@ -489,8 +489,36 @@ export class TargetRuntime {
     return dx * dx + dy * dy >= radius * radius
   }
 
-  apply(output: MotionOutput, dt: number, reduceMotion: boolean): boolean {
+  simulate(output: MotionOutput, dt: number, reduceMotion: boolean, snap = false): boolean {
     if (this.paused) return false
+    let active = false
+    if (this.bound) {
+      for (let index = 0; index < CHANNELS.length; index += 1) {
+        const key = CHANNELS[index]!
+        const signal = this.bindings[key]
+        if (!signal) continue
+        signal.step(dt)
+        output[key] += signal.value
+      }
+    }
+    const instant = this.config.motion === "instant" || reduceMotion || snap
+    for (let index = 0; index < CHANNELS.length; index += 1) {
+      const key = CHANNELS[index]!
+      const spring = this.springs[key]
+      const rest = key === "scaleX" || key === "scaleY" ? 1 : 0
+      spring.target = reduceMotion || !this.drive[key] ? rest : output[key]
+      if (instant) {
+        spring.value = spring.target
+        spring.velocity = 0
+      } else if (!spring.settled()) {
+        if (spring.step(dt)) active = true
+      }
+    }
+    this.busy = active
+    return active
+  }
+
+  commit(): void {
     const origin = this.config.tiltOrigin || "center"
     if (origin !== this.lastOrigin) {
       this.element.style.transformOrigin = origin
@@ -508,33 +536,6 @@ export class TargetRuntime {
         this.element.style.offsetRotate = "auto"
         this.lastOffsetPath = offsetPath
       }
-    }
-
-    let active = false
-    if (this.bound) {
-      for (let index = 0; index < CHANNELS.length; index += 1) {
-        const key = CHANNELS[index]!
-        const signal = this.bindings[key]
-        if (!signal) continue
-        signal.step(dt)
-        output[key] += signal.value
-      }
-    }
-    const instant = this.config.motion === "instant" || reduceMotion
-    for (let index = 0; index < CHANNELS.length; index += 1) {
-      const key = CHANNELS[index]!
-      const spring = this.springs[key]
-      const rest = key === "scaleX" || key === "scaleY" ? 1 : 0
-      spring.target = reduceMotion || !this.drive[key] ? rest : output[key]
-      if (instant) {
-        spring.value = spring.target
-        spring.velocity = 0
-      } else if (!spring.settled()) {
-        if (spring.step(dt)) active = true
-      }
-    }
-
-    if (this.usesPath) {
       const path = this.springs.path.value
       if (path !== this.drawnPath) {
         this.drawnPath = path
@@ -548,37 +549,48 @@ export class TargetRuntime {
         this.element.style.transform = ""
         this.drawnX = NaN
       }
-    } else {
-      const x = this.springs.x.value
-      const y = this.springs.y.value
-      const z = this.springs.z.value
-      const rx = this.springs.rotateX.value
-      const ry = this.springs.rotateY.value
-      const rz = this.springs.rotateZ.value
-      const sx = this.springs.scaleX.value
-      const sy = this.springs.scaleY.value
-      if (
-        x !== this.drawnX ||
-        y !== this.drawnY ||
-        z !== this.drawnZ ||
-        rx !== this.drawnRx ||
-        ry !== this.drawnRy ||
-        rz !== this.drawnRz ||
-        sx !== this.drawnSx ||
-        sy !== this.drawnSy
-      ) {
-        this.drawnX = x
-        this.drawnY = y
-        this.drawnZ = z
-        this.drawnRx = rx
-        this.drawnRy = ry
-        this.drawnRz = rz
-        this.drawnSx = sx
-        this.drawnSy = sy
-        this.element.style.transform = `translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, ${z.toFixed(2)}px) rotateX(${rx.toFixed(3)}deg) rotateY(${ry.toFixed(3)}deg) rotateZ(${rz.toFixed(3)}deg) scale3d(${sx.toFixed(3)}, ${sy.toFixed(3)}, 1)`
-      }
+      return
     }
-    this.busy = active
+    const x = this.springs.x.value
+    const y = this.springs.y.value
+    const z = this.springs.z.value
+    const rx = this.springs.rotateX.value
+    const ry = this.springs.rotateY.value
+    const rz = this.springs.rotateZ.value
+    const sx = this.springs.scaleX.value
+    const sy = this.springs.scaleY.value
+    if (
+      x !== this.drawnX ||
+      y !== this.drawnY ||
+      z !== this.drawnZ ||
+      rx !== this.drawnRx ||
+      ry !== this.drawnRy ||
+      rz !== this.drawnRz ||
+      sx !== this.drawnSx ||
+      sy !== this.drawnSy
+    ) {
+      this.drawnX = x
+      this.drawnY = y
+      this.drawnZ = z
+      this.drawnRx = rx
+      this.drawnRy = ry
+      this.drawnRz = rz
+      this.drawnSx = sx
+      this.drawnSy = sy
+      let transform = `translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, ${z.toFixed(2)}px)`
+      if (rx || ry || rz) {
+        transform += ` rotateX(${rx.toFixed(3)}deg) rotateY(${ry.toFixed(3)}deg) rotateZ(${rz.toFixed(3)}deg)`
+      }
+      if (sx !== 1 || sy !== 1) {
+        transform += ` scale3d(${sx.toFixed(3)}, ${sy.toFixed(3)}, 1)`
+      }
+      this.element.style.transform = transform
+    }
+  }
+
+  apply(output: MotionOutput, dt: number, reduceMotion: boolean): boolean {
+    const active = this.simulate(output, dt, reduceMotion)
+    this.commit()
     return active
   }
 
