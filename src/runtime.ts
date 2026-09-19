@@ -1298,7 +1298,6 @@ class ScopeRuntime implements KinesisScope {
         if (parent instanceof HTMLElement) this.parentEls.add(parent)
       }
       if (config.drag) drag = true
-      if (config.press || config.hold || target?.press || target?.tapImpulse) time = true
     }
     consider(this.scopeConfig)
     this.targets.forEach((target) => {
@@ -1728,7 +1727,7 @@ class ScopeRuntime implements KinesisScope {
       target.orbitVel = ctx.orbitVel
       if (target.simulate(output, dt, reduce, snap)) active = true
     }
-    if (this.timeDriven || this.drag.live) active = true
+    if ((this.timeDriven && !reduceScene) || this.drag.live) active = true
     if (this.wakeDriven && this.lastPointer.time && ctx.wakeNow - this.lastPointer.time < this.maxWake) active = true
     if (this.scrollDriven) {
       if (Math.abs(rootProgress - this.lastViewProgress) > 0.0008) active = true

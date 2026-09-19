@@ -86,6 +86,7 @@ export class KinesisAudio {
   private connected = false
   private ownsDestination = false
   private ownsContext = false
+  private ownsMedia = false
   private unbind: Array<() => void> = []
   private onActivity: (() => void) | undefined
 
@@ -109,8 +110,13 @@ export class KinesisAudio {
 
   connect(source: AudioSourceInput): this {
     if (typeof window === "undefined") return this
+    this.releaseOwnedMedia()
     this.disconnectGraph()
+    this.ownsMedia = false
     const resolved = this.resolveSource(source)
+    if (typeof source === "string" && !(resolved instanceof HTMLMediaElement && document.contains(resolved))) {
+      this.ownsMedia = resolved instanceof HTMLMediaElement
+    }
 
     if (resolved instanceof AnalyserNode) {
       this.analyser = resolved
@@ -251,6 +257,7 @@ export class KinesisAudio {
     this.disconnectGraph()
     this.unbind.forEach((fn) => fn())
     this.unbind = []
+    this.releaseOwnedMedia()
     if (this.stream) {
       this.stream.getTracks().forEach((track) => track.stop())
       this.stream = undefined
@@ -258,6 +265,15 @@ export class KinesisAudio {
     if (this.ownsContext) void this.context?.close()
     this.context = undefined
     this.connected = false
+  }
+
+  private releaseOwnedMedia(): void {
+    if (!this.ownsMedia || !this.media) return
+    this.media.pause()
+    this.media.removeAttribute("src")
+    this.media.load()
+    this.ownsMedia = false
+    this.media = undefined
   }
 
   private cacheBands(): void {

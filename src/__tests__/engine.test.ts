@@ -166,6 +166,72 @@ it("reduced motion is still", () => {
   expect(output.rotateY).toBe(0)
 })
 
+it("tether stays still inside slack", () => {
+  const ctx = createComputeContext()
+  ctx.restX = 0
+  ctx.restY = 0
+  ctx.anchorX = 60
+  ctx.anchorY = 0
+  const output = computeOutput(
+    base({ tether: 80, tetherSlack: 20 }),
+    { x: 60, y: 0, nx: 0, ny: 0 },
+    rect,
+    0,
+    false,
+    0,
+    "pointer",
+    undefined,
+    undefined,
+    ctx,
+  )
+  expect(output.x).toBe(0)
+  expect(output.y).toBe(0)
+})
+
+it("tether pulls once slack is spent", () => {
+  const ctx = createComputeContext()
+  ctx.restX = 0
+  ctx.restY = 0
+  ctx.anchorX = 200
+  ctx.anchorY = 0
+  const output = computeOutput(
+    base({ tether: 80, tetherSlack: 20 }),
+    { x: 200, y: 0, nx: 0, ny: 0 },
+    rect,
+    0,
+    false,
+    0,
+    "pointer",
+    undefined,
+    undefined,
+    ctx,
+  )
+  expect(output.x).toBe(120)
+  expect(output.y).toBe(0)
+})
+
+it("orbit sits on the radius", () => {
+  const ctx = createComputeContext()
+  ctx.restX = 0
+  ctx.restY = 0
+  ctx.anchorX = 0
+  ctx.anchorY = 0
+  ctx.clock = 0
+  const output = computeOutput(
+    base({ orbit: 80, orbitMode: "time" }),
+    { x: 0, y: 0, nx: 0, ny: 0 },
+    rect,
+    0,
+    false,
+    0,
+    "pointer",
+    undefined,
+    undefined,
+    ctx,
+  )
+  expect(Math.hypot(output.x, output.y)).toBeCloseTo(80)
+})
+
 it("reduced-motion policy is respect reduce none ignore", () => {
   expect(shouldReduceMotion(base({ reducedMotion: "ignore" }), true)).toBe(false)
   expect(shouldReduceMotion(base({ reducedMotion: "respect" }), false)).toBe(false)

@@ -1,4 +1,5 @@
 import { expect, it } from "vitest"
+import { admissionReady, admissionRecords } from "../spec/admission"
 import { kinesisRegistry, kinesisRegistryMap, publicShipInteractions, registryLane } from "../spec/registry"
 
 it("ships a small public language", () => {
@@ -32,4 +33,6 @@ it("ships a small public language", () => {
   expect(registryLane(kinesisRegistryMap.orbit)).toBe("next")
   expect(registryLane(kinesisRegistryMap.wake)).toBe("lab")
   expect(kinesisRegistry.every((entry) => entry.id && entry.kind && entry.status)).toBe(true)
+  expect(admissionRecords.every((entry) => entry.verdict === "hold")).toBe(true)
+  expect(admissionRecords.some((entry) => admissionReady(entry))).toBe(false)
 })

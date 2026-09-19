@@ -57,6 +57,10 @@ export {
   responseChannels,
   responseChannelMap,
   getResponseChannel,
+  admissionRecords,
+  admissionRecordMap,
+  getAdmissionRecord,
+  admissionReady,
 } from "./spec"
 export type {
   CssPropertySpec,
@@ -72,6 +76,9 @@ export type {
   ResponseChannel,
   ResponseCost,
   ResponseDomain,
+  AdmissionRecord,
+  AdmissionGates,
+  AdmissionVerdict,
 } from "./spec"
 export { parseColor, lerpColor, serializeColor, composeFilter, rgbToOklab } from "./color"
 export type { Color } from "./color"

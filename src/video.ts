@@ -151,6 +151,7 @@ export class KinesisVideo {
     this.unbind.forEach((fn) => fn())
     this.unbind = []
     if (this.ownsMedia) {
+      this.media?.pause()
       this.media?.removeAttribute("src")
       this.media?.load()
     }

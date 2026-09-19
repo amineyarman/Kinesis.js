@@ -24,4 +24,6 @@ export {
   registryByLane,
 } from "./registry"
 export { responseChannels, responseChannelMap, getResponseChannel } from "./responses"
+export { admissionRecords, admissionRecordMap, getAdmissionRecord, admissionReady } from "./admission"
+export type { AdmissionRecord, AdmissionGates, AdmissionVerdict } from "./admission"
 export type { ResponseChannel, ResponseCost, ResponseDomain } from "./responses"
