@@ -24,7 +24,6 @@ export {
   SpatialHash,
 } from "./field"
 export type { FieldSample } from "./field"
-export { createFieldOverlay } from "./devtools"
 export { KSignal } from "./signal"
 export { KinesisAudio, audioBands, bandEnergy, hzToBin, peakEnergy, resolveBand } from "./audio"
 export type { AudioBandName, AudioSourceInput } from "./audio"
