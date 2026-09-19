@@ -23,6 +23,7 @@ import { KSignal } from "./signal"
 import { KinesisAudio, type AudioSourceInput } from "./audio"
 import { KinesisVideo, type VideoSourceInput } from "./video"
 import { registerCssProperties } from "./register"
+import { constrainDrag, resolveDragAxis } from "./drag"
 import { clamp, Spring } from "./core"
 import { getMotionPreset } from "./spec/motion-presets"
 
@@ -45,6 +46,7 @@ export interface MotionHandle {
   face(value: { to?: string; max?: number; axis?: string; invert?: boolean }): this
   vortex(value: { strength?: number; radius?: number; spin?: number; pull?: number }): this
   wind(value: { amount?: number; radius?: number }): this
+  drag(value?: { axis?: string; bounds?: string; snap?: number; inertia?: number; threshold?: number }): this
   pause(): this
   resume(): this
   refresh(): this
@@ -199,6 +201,11 @@ const PROPERTY_MAP: Record<string, string> = {
   tether: "--k-tether",
   tetherSlack: "--k-tether-slack",
   face: "--k-face",
+  drag: "--k-drag",
+  dragBounds: "--k-drag-bounds",
+  dragSnap: "--k-drag-snap",
+  dragInertia: "--k-drag-inertia",
+  dragThreshold: "--k-drag-threshold",
   wave: "--k-wave",
   ripple: "--k-ripple",
   lensScale: "--k-lens-scale",
@@ -219,7 +226,8 @@ function formatCssValue(name: string, value: string | number | number[]): string
       name !== "--k-wake-force" &&
       name !== "--k-edge-force" &&
       name !== "--k-edge-box" &&
-      (/force|intensity|depth|audio|spring|smoothing|vortex|spin|pull|speed|spread|scale|threshold|limit|invert|trail|strength/.test(name) ||
+      name !== "--k-drag-threshold" &&
+      (/force|intensity|depth|audio|spring|smoothing|vortex|spin|pull|speed|spread|scale|threshold|limit|invert|trail|strength|inertia/.test(name) ||
         name === "--k-motion" ||
         name === "--k-source")
     ) {
@@ -346,6 +354,15 @@ function createHandle(element: HTMLElement, runtime: ScopeRuntime): MotionHandle
       return this.set({
         wind: value.amount ?? 36,
         windRadius: value.radius ?? 200,
+      })
+    },
+    drag(value = {}) {
+      return this.set({
+        drag: value.axis ?? "both",
+        ...(value.bounds ? { dragBounds: value.bounds } : {}),
+        ...(value.snap != null ? { dragSnap: value.snap } : {}),
+        ...(value.inertia != null ? { dragInertia: value.inertia } : {}),
+        ...(value.threshold != null ? { dragThreshold: value.threshold } : {}),
       })
     },
     pause() {
@@ -566,8 +583,19 @@ class ScopeRuntime implements KinesisScope {
   private maxFieldRadius = 0
   private timeDriven = false
   private fieldCount = 0
+  private dragDriven = false
   private clock = 0
   private frameCtx: ComputeContext = createComputeContext()
+  private drag = {
+    target: null as TargetRuntime | null,
+    pointerId: -1,
+    armed: false,
+    live: false,
+    startX: 0,
+    startY: 0,
+    grabX: 0,
+    grabY: 0,
+  }
 
   constructor(root: HTMLElement) {
     this.root = root
@@ -649,6 +677,7 @@ class ScopeRuntime implements KinesisScope {
       const space = this.space()
       this.pointerState.nx = space === "viewport" ? viewX : localX
       this.pointerState.ny = space === "viewport" ? viewY : localY
+      this.advanceDrag(event)
       this.kick()
     }
     this.windowPointer = this.root.dataset.kinesisPointer === "window"
@@ -661,6 +690,7 @@ class ScopeRuntime implements KinesisScope {
         this.pointerInside = true
       }
       const onLeave = () => {
+        if (this.drag.live) return
         this.pointerInside = false
         this.pointerState.nx = 0
         this.pointerState.ny = 0
@@ -675,6 +705,22 @@ class ScopeRuntime implements KinesisScope {
         this.root.removeEventListener("pointerleave", onLeave)
       })
     }
+
+    const onDragDown = (event: PointerEvent) => this.beginDrag(event)
+    const onDragUp = (event: PointerEvent) => this.endDrag(event)
+    const onDragKey = (event: KeyboardEvent) => this.nudgeDrag(event)
+    this.root.addEventListener("pointerdown", onDragDown)
+    this.root.addEventListener("pointerup", onDragUp)
+    this.root.addEventListener("pointercancel", onDragUp)
+    this.root.addEventListener("lostpointercapture", onDragUp)
+    this.root.addEventListener("keydown", onDragKey)
+    this.unbind.push(() => {
+      this.root.removeEventListener("pointerdown", onDragDown)
+      this.root.removeEventListener("pointerup", onDragUp)
+      this.root.removeEventListener("pointercancel", onDragUp)
+      this.root.removeEventListener("lostpointercapture", onDragUp)
+      this.root.removeEventListener("keydown", onDragKey)
+    })
 
     kernel.add(this)
     this.unbind.push(() => kernel.remove(this))
@@ -737,6 +783,149 @@ class ScopeRuntime implements KinesisScope {
     if (this.pointerInside || this.windowPointer) this.kick()
   }
 
+  private findDragTarget(event: PointerEvent): TargetRuntime | undefined {
+    let node: Node | null = event.target instanceof Node ? event.target : null
+    while (node && node !== this.root) {
+      if (node instanceof HTMLElement) {
+        if (node.hasAttribute("data-kinesis") && node !== this.root) return undefined
+        const target = this.targets.get(node)
+        if (target?.config.drag) return target
+      }
+      node = node.parentNode
+    }
+    return undefined
+  }
+
+  private dragBox(target: TargetRuntime): { left: number; top: number; width: number; height: number } | null {
+    const kind = target.config.dragBounds
+    if (kind === "viewport") {
+      return { left: 0, top: 0, width: window.innerWidth || 0, height: window.innerHeight || 0 }
+    }
+    if (kind === "scene") return this.rootRect ?? null
+    if (kind === "parent") {
+      const parent = target.element.parentElement
+      if (!(parent instanceof HTMLElement)) return null
+      return this.parents.get(parent) ?? this.targets.get(parent)?.rect ?? null
+    }
+    return null
+  }
+
+  private placeDrag(target: TargetRuntime, x: number, y: number, snap: number): { x: number; y: number } {
+    const axis = resolveDragAxis(target.config.drag, target.config.axis)
+    const rest = target.rect ?? { left: 0, top: 0, width: 0, height: 0 }
+    return constrainDrag(x, y, rest, this.dragBox(target), snap, axis)
+  }
+
+  private beginDrag(event: PointerEvent): void {
+    if (this.destroyed || this.paused || event.button) return
+    const target = this.findDragTarget(event)
+    if (!target) return
+    if (!target.rect) this.measure(target)
+    if (!target.rect) return
+    const restX = target.rect.left + target.rect.width / 2
+    const restY = target.rect.top + target.rect.height / 2
+    this.drag.target = target
+    this.drag.pointerId = event.pointerId
+    this.drag.armed = true
+    this.drag.live = false
+    this.drag.startX = event.clientX
+    this.drag.startY = event.clientY
+    this.drag.grabX = event.clientX - (restX + target.dragX)
+    this.drag.grabY = event.clientY - (restY + target.dragY)
+  }
+
+  private advanceDrag(event: PointerEvent): void {
+    if ((!this.drag.armed && !this.drag.live) || event.pointerId !== this.drag.pointerId) return
+    const target = this.drag.target
+    if (!target?.rect) return
+    const axis = resolveDragAxis(target.config.drag, target.config.axis)
+    const dx = event.clientX - this.drag.startX
+    const dy = event.clientY - this.drag.startY
+    if (!this.drag.live) {
+      const along = axis === "x" ? Math.abs(dx) : axis === "y" ? Math.abs(dy) : Math.hypot(dx, dy)
+      const across = axis === "x" ? Math.abs(dy) : axis === "y" ? Math.abs(dx) : 0
+      if (across > target.config.dragThreshold && across > along) {
+        this.drag.armed = false
+        this.drag.target = null
+        return
+      }
+      if (along < target.config.dragThreshold) return
+      this.drag.live = true
+      target.dragLive = true
+      try {
+        target.element.setPointerCapture(event.pointerId)
+      } catch {
+        undefined
+      }
+    }
+    const restX = target.rect.left + target.rect.width / 2
+    const restY = target.rect.top + target.rect.height / 2
+    const next = this.placeDrag(
+      target,
+      event.clientX - this.drag.grabX - restX,
+      event.clientY - this.drag.grabY - restY,
+      0,
+    )
+    target.dragX = next.x
+    target.dragY = next.y
+    target.pin(next.x, next.y)
+  }
+
+  private endDrag(event: PointerEvent): void {
+    if (event.pointerId !== this.drag.pointerId) return
+    const target = this.drag.target
+    const live = this.drag.live
+    this.drag.armed = false
+    this.drag.live = false
+    this.drag.target = null
+    this.drag.pointerId = -1
+    if (!target) return
+    target.dragLive = false
+    try {
+      if (target.element.hasPointerCapture(event.pointerId)) target.element.releasePointerCapture(event.pointerId)
+    } catch {
+      undefined
+    }
+    if (!live) return
+    const reduce = shouldReduceMotion(target.config, this.systemReduce)
+    const inertia = reduce ? 0 : target.config.dragInertia
+    const axis = resolveDragAxis(target.config.drag, target.config.axis)
+    const vx = axis === "y" ? 0 : this.velocity.x
+    const vy = axis === "x" ? 0 : this.velocity.y
+    const projected = this.placeDrag(
+      target,
+      target.dragX + vx * 0.18 * Math.max(inertia, 0),
+      target.dragY + vy * 0.18 * Math.max(inertia, 0),
+      target.config.dragSnap,
+    )
+    target.dragX = projected.x
+    target.dragY = projected.y
+    if (inertia <= 0) target.pin(projected.x, projected.y)
+    else target.toss(projected.x, projected.y, vx, vy)
+    this.kick()
+  }
+
+  private nudgeDrag(event: KeyboardEvent): void {
+    const el = document.activeElement
+    if (!(el instanceof HTMLElement)) return
+    const target = this.targets.get(el)
+    if (!target?.config.drag) return
+    const step = target.config.dragSnap || 16
+    let dx = 0
+    let dy = 0
+    if (event.key === "ArrowLeft") dx = -step
+    else if (event.key === "ArrowRight") dx = step
+    else if (event.key === "ArrowUp") dy = -step
+    else if (event.key === "ArrowDown") dy = step
+    else return
+    event.preventDefault()
+    const next = this.placeDrag(target, target.dragX + dx, target.dragY + dy, target.config.dragSnap)
+    target.dragX = next.x
+    target.dragY = next.y
+    target.pin(next.x, next.y)
+    this.kick()
+  }
+
   handleWindowOrient(event: DeviceOrientationEvent): void {
     if (event.beta == null && event.gamma == null) return
     this.orientationState.beta = event.beta ?? 0
@@ -796,6 +985,7 @@ class ScopeRuntime implements KinesisScope {
     let tilt = false
     let time = false
     let wake = false
+    let drag = false
     let maxWake = 0
     let fields = 0
     let radius = 0
@@ -824,10 +1014,11 @@ class ScopeRuntime implements KinesisScope {
         fields += 1
         if (target.proximityRadius > radius) radius = target.proximityRadius
       }
-      if ((config.anchor === "parent" || config.edgeBox === "container") && target) {
+      if ((config.anchor === "parent" || config.edgeBox === "container" || config.dragBounds === "parent") && target) {
         const parent = target.element.parentElement
         if (parent instanceof HTMLElement) this.parentEls.add(parent)
       }
+      if (config.drag) drag = true
     }
     consider(this.scopeConfig)
     this.targets.forEach((target) => {
@@ -840,6 +1031,7 @@ class ScopeRuntime implements KinesisScope {
     this.threeD = !!this.sceneEl || depth || tilt
     this.timeDriven = time
     this.wakeDriven = wake
+    this.dragDriven = drag
     this.maxWake = maxWake
     this.fieldCount = fields
     this.maxFieldRadius = radius
@@ -1149,6 +1341,8 @@ class ScopeRuntime implements KinesisScope {
         continue
       }
       this.fillAnchor(target, pointer, ctx)
+      ctx.dragX = target.dragX
+      ctx.dragY = target.dragY
       ctx.orbitAngle = target.orbitAngle
       ctx.orbitVel = target.orbitVel
       const delayed = config.trail > 0 ? this.pointerAt(config.trail * 100) : undefined
@@ -1179,7 +1373,7 @@ class ScopeRuntime implements KinesisScope {
       target.orbitVel = ctx.orbitVel
       if (target.simulate(output, dt, reduce, snap)) active = true
     }
-    if (this.timeDriven) active = true
+    if (this.timeDriven || this.drag.live) active = true
     if (this.wakeDriven && this.lastPointer.time && ctx.wakeNow - this.lastPointer.time < this.maxWake) active = true
     if (this.scrollDriven) {
       if (Math.abs(rootProgress - this.lastViewProgress) > 0.0008) active = true
@@ -1648,6 +1842,15 @@ class ScopeRuntime implements KinesisScope {
   destroy(): void {
     this.destroyed = true
     this.paused = true
+    if (this.drag.target) {
+      try {
+        if (this.drag.pointerId >= 0) this.drag.target.element.releasePointerCapture(this.drag.pointerId)
+      } catch {
+        undefined
+      }
+      this.drag.target.dragLive = false
+      this.drag.target = null
+    }
     kernel.remove(this)
     this.unbind.forEach((fn) => fn())
     this.targets.forEach((target) => target.destroy())

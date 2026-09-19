@@ -18,6 +18,7 @@ export type PropertyCategory =
   | "group"
   | "edge"
   | "text"
+  | "drag"
 export type PreviewKind =
   | "source"
   | "motion"

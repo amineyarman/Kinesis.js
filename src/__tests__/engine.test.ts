@@ -1,6 +1,7 @@
 import { expect, it } from "vitest"
+import { constrainDrag } from "../drag"
 import { computeEdge } from "../edge"
-import { computeOutput, defaults, solveChain, type TargetConfig } from "../effects"
+import { computeOutput, createComputeContext, defaults, solveChain, type TargetConfig } from "../effects"
 
 const base = (overrides: Partial<TargetConfig> = {}): TargetConfig => ({
   ...defaults,
@@ -87,6 +88,57 @@ it("path follows the pointer", () => {
     "pointer",
   )
   expect(output.path).toBe(100)
+})
+
+it("drag offset is applied", () => {
+  const ctx = createComputeContext()
+  ctx.dragX = 40
+  ctx.dragY = -12
+  const output = computeOutput(
+    base({ drag: "both" }),
+    { x: 0, y: 0, nx: 0, ny: 0 },
+    rect,
+    0,
+    false,
+    0,
+    "pointer",
+    undefined,
+    undefined,
+    ctx,
+  )
+  expect(output.x).toBe(40)
+  expect(output.y).toBe(-12)
+})
+
+it("drag stays functional under reduced motion", () => {
+  const ctx = createComputeContext()
+  ctx.dragX = 24
+  const output = computeOutput(
+    base({ drag: "both", parallaxX: 40 }),
+    { x: 200, y: 100, nx: 1, ny: 0 },
+    rect,
+    0,
+    true,
+    0,
+    "pointer",
+    undefined,
+    undefined,
+    ctx,
+  )
+  expect(output.x).toBe(24)
+  expect(output.y).toBe(0)
+})
+
+it("drag bounds keep the box inside", () => {
+  const next = constrainDrag(200, 80, { left: 0, top: 0, width: 40, height: 40 }, { left: 0, top: 0, width: 100, height: 100 }, 0, "both")
+  expect(next.x).toBe(60)
+  expect(next.y).toBe(60)
+})
+
+it("drag snap rounds to the grid", () => {
+  const next = constrainDrag(18, 10, rect, null, 16, "x")
+  expect(next.x).toBe(16)
+  expect(next.y).toBe(0)
 })
 
 it("reduced motion is still", () => {

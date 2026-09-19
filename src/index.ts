@@ -30,6 +30,8 @@ export { KinesisAudio, audioBands, bandEnergy, hzToBin, peakEnergy, resolveBand 
 export type { AudioBandName, AudioSourceInput } from "./audio"
 export { computeEdge, createEdgeSample } from "./edge"
 export type { EdgeSample } from "./edge"
+export { constrainDrag, parseDrag, resolveDragAxis } from "./drag"
+export type { DragBox } from "./drag"
 export { KinesisVideo } from "./video"
 export type { VideoSourceInput } from "./video"
 export {

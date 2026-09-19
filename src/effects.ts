@@ -13,6 +13,7 @@ import {
   createFieldSample,
 } from "./field"
 import { computeEdge } from "./edge"
+import { parseDrag } from "./drag"
 import { getMotionPreset } from "./spec/motion-presets"
 import type { KSignal } from "./signal"
 
@@ -106,6 +107,11 @@ export interface TargetConfig {
   edge: number
   edgeForce: number
   edgeBox: string
+  drag: string
+  dragBounds: string
+  dragSnap: number
+  dragInertia: number
+  dragThreshold: number
 }
 
 export interface GroupConfig {
@@ -180,6 +186,8 @@ export interface ComputeContext {
   boxTop: number
   boxW: number
   boxH: number
+  dragX: number
+  dragY: number
 }
 
 export const defaults: TargetConfig = {
@@ -272,6 +280,11 @@ export const defaults: TargetConfig = {
   edge: 0,
   edgeForce: 0,
   edgeBox: "scene",
+  drag: "",
+  dragBounds: "none",
+  dragSnap: 0,
+  dragInertia: 1,
+  dragThreshold: 6,
 }
 
 function read(style: CSSStyleDeclaration, name: string): string {
@@ -571,6 +584,11 @@ export function parseTargetConfig(style: CSSStyleDeclaration): TargetConfig {
     edge,
     edgeForce: optionalPx(read(style, "--k-edge-force")) || (edge ? 24 : 0),
     edgeBox: read(style, "--k-edge-box") || "scene",
+    drag: parseDrag(read(style, "--k-drag")),
+    dragBounds: read(style, "--k-drag-bounds") || "none",
+    dragSnap: optionalPx(read(style, "--k-drag-snap")),
+    dragInertia: Number.parseFloat(read(style, "--k-drag-inertia") || "1") || 0,
+    dragThreshold: optionalPx(read(style, "--k-drag-threshold")) || 6,
   }
 }
 
@@ -604,7 +622,8 @@ export function isMotionTarget(config: TargetConfig): boolean {
     config.bend !== 0 ||
     config.chain !== 0 ||
     config.wake !== 0 ||
-    config.edge !== 0
+    config.edge !== 0 ||
+    config.drag !== ""
   )
 }
 
@@ -706,6 +725,8 @@ export function createComputeContext(): ComputeContext {
     boxTop: 0,
     boxW: 0,
     boxH: 0,
+    dragX: 0,
+    dragY: 0,
   }
 }
 
@@ -759,7 +780,14 @@ export function computeOutput(
   ctx?: ComputeContext,
 ): MotionOutput {
   const output = restOutput(into)
-  if (!config.enabled || reduceMotion) return output
+  if (!config.enabled) return output
+  if (reduceMotion) {
+    if (config.drag) {
+      output.x += ctx?.dragX ?? 0
+      output.y += ctx?.dragY ?? 0
+    }
+    return output
+  }
 
   let nx = pointer.nx
   let ny = pointer.ny
@@ -783,6 +811,10 @@ export function computeOutput(
 
   const restX = ctx?.restX ?? rect.left + rect.width / 2
   const restY = ctx?.restY ?? rect.top + rect.height / 2
+  if (config.drag) {
+    output.x += ctx?.dragX ?? 0
+    output.y += ctx?.dragY ?? 0
+  }
   if (ctx?.hasChain) {
     output.x += (ctx.chainX - restX) * intensity
     output.y += (ctx.chainY - restY) * intensity
@@ -1068,6 +1100,9 @@ export class TargetRuntime {
   orbitVel = 0
   chainX = Number.NaN
   chainY = Number.NaN
+  dragX = 0
+  dragY = 0
+  dragLive = false
   readonly scratch: MotionOutput = restOutput()
   private springs: Record<keyof MotionOutput, Spring>
   private drive: Record<keyof MotionOutput, boolean> = {
@@ -1130,7 +1165,7 @@ export class TargetRuntime {
     const audio = config.audioBin >= 0 || (config.audioBand !== "none" && config.audioBand !== "")
     const pull = config.magneticRadius > 0 || config.attract !== 0 || config.repel !== 0
     const field = pull || config.vortex !== 0 || config.wind !== 0 || config.ripple !== 0 || config.lensOn || config.bend !== 0
-    const shift = pull || follow || config.trail || config.scrollX || config.orbit || config.vortex || config.wind || config.tether || config.wave || config.ripple || config.bend || config.chain || config.wake || config.edge
+    const shift = pull || follow || config.trail || config.scrollX || config.orbit || config.vortex || config.wind || config.tether || config.wave || config.ripple || config.bend || config.chain || config.wake || config.edge || config.drag
     this.bound = CHANNELS.some((key) => !!this.bindings[key])
     this.drive.x = !!(config.parallaxX || shift || this.bindings.x)
     this.drive.y = !!(config.parallaxY || shift || this.bindings.y)
@@ -1168,6 +1203,7 @@ export class TargetRuntime {
       !config.chain &&
       !config.wake &&
       !config.edge &&
+      !config.drag &&
       !this.usesAnchor
     this.proximityRadius = Math.max(
       config.repel ? config.repelRadius : 0,
@@ -1202,7 +1238,7 @@ export class TargetRuntime {
         else output[key] += signal.value
       }
     }
-    const instant = this.config.motion === "instant" || reduceMotion || snap
+    const instant = this.config.motion === "instant" || reduceMotion || snap || this.dragLive
     for (let index = 0; index < CHANNELS.length; index += 1) {
       const key = CHANNELS[index]!
       const spring = this.springs[key]
@@ -1291,6 +1327,22 @@ export class TargetRuntime {
       }
       this.element.style.transform = transform
     }
+  }
+
+  pin(x: number, y: number): void {
+    this.springs.x.value = x
+    this.springs.x.target = x
+    this.springs.x.velocity = 0
+    this.springs.y.value = y
+    this.springs.y.target = y
+    this.springs.y.velocity = 0
+  }
+
+  toss(x: number, y: number, vx: number, vy: number): void {
+    this.springs.x.target = x
+    this.springs.y.target = y
+    this.springs.x.velocity = vx
+    this.springs.y.velocity = vy
   }
 
   apply(output: MotionOutput, dt: number, reduceMotion: boolean): boolean {
