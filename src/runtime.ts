@@ -237,6 +237,9 @@ class ScopeRuntime implements KinesisScope {
   private pointerInside = false
   private windowPointer = false
   private rootRect: DOMRect | undefined
+  private scopeConfig: TargetConfig | undefined
+  private measuredScrollX = 0
+  private measuredScrollY = 0
   private lastViewProgress = -1
   private sceneRx = new Spring(180, 22, 1)
   private sceneRy = new Spring(180, 22, 1)
@@ -367,7 +370,7 @@ class ScopeRuntime implements KinesisScope {
 
     const onScroll = () => {
       this.captureScroll()
-      this.layoutDirty = true
+      this.syncScrollLayout()
       this.kick()
     }
     window.addEventListener("scroll", onScroll, { passive: true })
@@ -421,9 +424,49 @@ class ScopeRuntime implements KinesisScope {
   }
 
   private scrollProgress(element: HTMLElement): number {
-    const rect = element.getBoundingClientRect()
+    const rect =
+      element === this.root
+        ? this.rootRect ?? element.getBoundingClientRect()
+        : this.targets.get(element)?.rect ?? element.getBoundingClientRect()
     const view = window.innerHeight || 1
     return Math.min(1, Math.max(0, 1 - rect.top / (view + rect.height)))
+  }
+
+  private nudgeRect(rect: DOMRect, dx: number, dy: number): DOMRect {
+    return new DOMRect(rect.x - dx, rect.y - dy, rect.width, rect.height)
+  }
+
+  private syncScrollLayout(): void {
+    const x = window.scrollX || 0
+    const y = window.scrollY || 0
+    const dx = x - this.measuredScrollX
+    const dy = y - this.measuredScrollY
+    if (dx || dy) {
+      if (this.rootRect) this.rootRect = this.nudgeRect(this.rootRect, dx, dy)
+      this.targets.forEach((target) => {
+        if (target.rect) target.rect = this.nudgeRect(target.rect, dx, dy)
+      })
+    }
+    this.measuredScrollX = x
+    this.measuredScrollY = y
+  }
+
+  private usesScrollSource(): boolean {
+    const configs = [this.scopeConfig, ...Array.from(this.targets.values()).map((target) => target.config)]
+    return configs.some(
+      (config) =>
+        !!config &&
+        (config.source === "scroll" ||
+          config.scrollX !== 0 ||
+          config.scrollY !== 0 ||
+          config.scrollRotate !== 0 ||
+          !!config.path),
+    )
+  }
+
+  private readScopeConfig(): TargetConfig {
+    this.scopeConfig = parseTargetConfig(getComputedStyle(this.root))
+    return this.scopeConfig
   }
 
   private captureScroll(): void {
@@ -509,6 +552,8 @@ class ScopeRuntime implements KinesisScope {
     this.root.style.transform = "none"
     this.rootRect = this.root.getBoundingClientRect()
     this.root.style.transform = previous
+    this.measuredScrollX = window.scrollX || 0
+    this.measuredScrollY = window.scrollY || 0
   }
 
   private applyScene(dt: number, reduce: boolean): boolean {
@@ -516,7 +561,7 @@ class ScopeRuntime implements KinesisScope {
     if (!this.hasDepthScene() && scene === this.root) {
       return false
     }
-    const config = parseTargetConfig(getComputedStyle(this.root))
+    const config = this.scopeConfig ?? this.readScopeConfig()
     const tiltX = config.tiltX || 18
     const tiltY = config.tiltY || 18
     const preset = getMotionPreset(config.motion || "soft")
@@ -559,6 +604,7 @@ class ScopeRuntime implements KinesisScope {
   }
 
   private scan(): void {
+    this.readScopeConfig()
     const nodes = [this.root, ...Array.from(this.root.querySelectorAll<HTMLElement>("*"))].filter((node) => this.owns(node))
     const seen = new Set<HTMLElement>()
     nodes.forEach((node) => {
@@ -592,11 +638,11 @@ class ScopeRuntime implements KinesisScope {
       if (item.sample()) active = true
     })
     if (this.layoutDirty || !this.rootRect) this.measureRoot()
-    const reduceScene = shouldReduceMotion(parseTargetConfig(getComputedStyle(this.root)), this.systemReduce)
+    const scopeConfig = this.scopeConfig ?? this.readScopeConfig()
+    const reduceScene = shouldReduceMotion(scopeConfig, this.systemReduce)
     if (this.applyScene(dt, reduceScene)) active = true
     this.targets.forEach((target) => {
       if (target.paused) return
-      target.refresh(parseTargetConfig(getComputedStyle(target.element)))
       if (this.layoutDirty || !target.rect) this.measure(target)
       const config = target.config
       const reduce = shouldReduceMotion(config, this.systemReduce)
@@ -629,15 +675,17 @@ class ScopeRuntime implements KinesisScope {
       )
       if (target.apply(output, dt, reduce)) active = true
     })
-    const viewProgress = this.scrollProgress(this.root)
-    if (Math.abs(viewProgress - this.lastViewProgress) > 0.0008) active = true
-    this.lastViewProgress = viewProgress
+    if (this.usesScrollSource()) {
+      const viewProgress = this.scrollProgress(this.root)
+      if (Math.abs(viewProgress - this.lastViewProgress) > 0.0008) active = true
+      this.lastViewProgress = viewProgress
+      if (Math.abs(this.scrollState.velocity) > 0.4) active = true
+    }
     this.layoutDirty = false
     this.velocity.x *= 0.86
     this.velocity.y *= 0.86
     this.scrollState.velocity *= 0.86
     if (Math.hypot(this.velocity.x, this.velocity.y) > 0.4) active = true
-    if (Math.abs(this.scrollState.velocity) > 0.4) active = true
     this.frame = active ? window.requestAnimationFrame(this.tick) : 0
   }
 
