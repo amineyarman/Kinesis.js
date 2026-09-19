@@ -14,6 +14,7 @@ export type {
   FieldForce,
   FieldShape,
   FalloffName,
+  PathOptions,
 } from "./runtime"
 export {
   fieldFalloff,

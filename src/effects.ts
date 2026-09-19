@@ -49,6 +49,7 @@ export interface TargetConfig {
   scrollRotate: number
   path: string
   pathStrength: number
+  pathOrient: string
   audioBand: string
   audioBin: number
   audioScaleMin: number
@@ -196,6 +197,7 @@ export const defaults: TargetConfig = {
   scrollRotate: 0,
   path: "",
   pathStrength: 1,
+  pathOrient: "auto",
   audioBand: "none",
   audioBin: -1,
   audioScaleMin: 1,
@@ -425,6 +427,7 @@ export function parseTargetConfig(style: CSSStyleDeclaration): TargetConfig {
     scrollRotate: angleToDeg(read(style, "--k-scroll-rotate") || "0deg"),
     path: pathRaw && pathRaw !== "none" ? pathRaw : "",
     pathStrength: Number.parseFloat(read(style, "--k-path-strength") || "1") || 1,
+    pathOrient: read(style, "--k-path-orient") || "auto",
     audioBand: read(style, "--k-audio-band") || "none",
     audioBin: audioBinRaw && audioBinRaw !== "none" ? Number.parseInt(audioBinRaw, 10) : -1,
     audioScaleMin,
@@ -664,7 +667,11 @@ export function computeOutput(
   const rotateDrive = source === "scroll" ? scrollProgress : config.axis === "y" ? ny : config.axis === "both" ? nx + ny : nx
   output.rotateZ += config.rotate * rotateDrive * intensity
   output.rotateZ += config.scrollRotate * scrollProgress * intensity
-  if (config.path) output.path = clamp(scrollProgress * 100 * config.pathStrength, 0, 100)
+  if (config.path) {
+    const axis = config.axis === "y" ? ny : nx
+    const t = source === "pointer" || source === "orientation" ? (axis + 1) / 2 : scrollProgress
+    output.path = clamp(t * 100 * config.pathStrength, 0, 100)
+  }
 
   const restX = ctx?.restX ?? rect.left + rect.width / 2
   const restY = ctx?.restY ?? rect.top + rect.height / 2
@@ -923,6 +930,7 @@ export class TargetRuntime {
   private lastOrigin = ""
   private lastOffsetPath = ""
   private lastOffsetDistance = ""
+  private lastOffsetRotate = ""
   private drawnX = NaN
   private drawnY = NaN
   private drawnZ = NaN
@@ -1033,7 +1041,8 @@ export class TargetRuntime {
         const signal = this.bindings[key]
         if (!signal) continue
         signal.step(dt)
-        output[key] += signal.value
+        if (key === "path") output.path = signal.value
+        else output[key] += signal.value
       }
     }
     const instant = this.config.motion === "instant" || reduceMotion || snap
@@ -1068,8 +1077,12 @@ export class TargetRuntime {
         : `path("${raw.replace(/"/g, "")}")`
       if (offsetPath !== this.lastOffsetPath) {
         this.element.style.offsetPath = offsetPath
-        this.element.style.offsetRotate = "auto"
         this.lastOffsetPath = offsetPath
+      }
+      const rotate = this.config.pathOrient === "none" ? "0deg" : this.config.pathOrient || "auto"
+      if (rotate !== this.lastOffsetRotate) {
+        this.element.style.offsetRotate = rotate
+        this.lastOffsetRotate = rotate
       }
       const path = this.springs.path.value
       if (path !== this.drawnPath) {

@@ -34,6 +34,7 @@ export interface MotionHandle {
   magnetic(value: { radius?: number; force?: number }): this
   audio(value: { source: KinesisAudio; band?: string; scale?: number[]; motion?: string }): this
   orbit(value: { radius?: number; speed?: number; direction?: string; mode?: string; phase?: number }): this
+  path(value: { d?: string; strength?: number; orient?: string }): this
   tether(value: { to?: string; length?: number; slack?: number; axis?: string }): this
   face(value: { to?: string; max?: number; axis?: string; invert?: boolean }): this
   vortex(value: { strength?: number; radius?: number; spin?: number; pull?: number }): this
@@ -64,6 +65,12 @@ export interface FieldOptions {
   strength?: number
   falloff?: FalloffName
   direction?: "clockwise" | "counter-clockwise"
+}
+
+export interface PathOptions {
+  path: string
+  progress?: KSignal
+  orient?: boolean | string
 }
 
 export interface FieldHandle {
@@ -127,6 +134,7 @@ export interface KinesisScope {
   inView(selector: string | HTMLElement): ViewSignals
   group(selector?: string | HTMLElement): GroupHandle
   field(options: FieldOptions): FieldHandle
+  path(selector: string | HTMLElement, options: PathOptions): MotionHandle
   pause(): void
   resume(): void
   refresh(): void
@@ -155,6 +163,8 @@ const PROPERTY_MAP: Record<string, string> = {
   audioScale: "--k-audio-scale",
   scrollRotate: "--k-scroll-rotate",
   path: "--k-path",
+  pathStrength: "--k-path-strength",
+  pathOrient: "--k-path-orient",
   springStiffness: "--k-spring-stiffness",
   springDamping: "--k-spring-damping",
   springMass: "--k-spring-mass",
@@ -190,7 +200,7 @@ function formatCssValue(name: string, value: string | number | number[]): string
   if (typeof value === "number") {
     if (/tilt|rotate|face|bend|phase/.test(name)) return `${value}deg`
     if (
-      /force|intensity|depth|audio|spring|smoothing|vortex|spin|pull|speed|spread|scale|threshold|limit|invert|trail/.test(name) ||
+      /force|intensity|depth|audio|spring|smoothing|vortex|spin|pull|speed|spread|scale|threshold|limit|invert|trail|strength/.test(name) ||
       name === "--k-motion" ||
       name === "--k-source"
     ) {
@@ -266,6 +276,13 @@ function createHandle(element: HTMLElement, runtime: ScopeRuntime): MotionHandle
         ...(value.direction ? { orbitDirection: value.direction } : {}),
         ...(value.mode ? { orbitMode: value.mode } : {}),
         ...(value.phase != null ? { orbitPhase: value.phase } : {}),
+      })
+    },
+    path(value) {
+      return this.set({
+        path: value.d ?? "",
+        ...(value.strength != null ? { pathStrength: value.strength } : {}),
+        ...(value.orient ? { pathOrient: value.orient } : {}),
       })
     },
     tether(value) {
@@ -746,7 +763,7 @@ class ScopeRuntime implements KinesisScope {
         config.scrollX !== 0 ||
         config.scrollY !== 0 ||
         config.scrollRotate !== 0 ||
-        !!config.path
+        (config.path && config.source === "scroll")
       ) {
         scroll = true
       }
@@ -1266,6 +1283,19 @@ class ScopeRuntime implements KinesisScope {
 
   motion(selector: string | HTMLElement): MotionHandle {
     return createHandle(this.locate(selector), this)
+  }
+
+  path(selector: string | HTMLElement, options: PathOptions): MotionHandle {
+    const handle = this.motion(selector)
+    const orient = options.orient === false ? "none" : typeof options.orient === "string" ? options.orient : "auto"
+    handle.set({
+      path: options.path,
+      pathOrient: orient,
+    })
+    if (options.progress) {
+      handle.bind({ path: options.progress.map([0, 1], [0, 100]) })
+    }
+    return handle
   }
 
   group(selector?: string | HTMLElement): GroupHandle {

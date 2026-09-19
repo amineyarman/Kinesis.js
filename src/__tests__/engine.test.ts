@@ -32,6 +32,32 @@ it("tilt follows the pointer", () => {
   expect(output.rotateX).toBe(10)
 })
 
+it("path follows scroll progress", () => {
+  const output = computeOutput(
+    base({ path: "M 0 0 H 100" }),
+    { x: 0, y: 0, nx: 0, ny: 0 },
+    rect,
+    0.5,
+    false,
+    0,
+    "scroll",
+  )
+  expect(output.path).toBe(50)
+})
+
+it("path follows the pointer", () => {
+  const output = computeOutput(
+    base({ path: "M 0 0 H 100" }),
+    { x: 200, y: 100, nx: 1, ny: 0 },
+    rect,
+    0,
+    false,
+    0,
+    "pointer",
+  )
+  expect(output.path).toBe(100)
+})
+
 it("reduced motion is still", () => {
   const output = computeOutput(
     base({ parallaxX: 40, tiltY: 8 }),
