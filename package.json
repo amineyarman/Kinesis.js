@@ -1,35 +1,44 @@
 {
   "name": "@amineyarman/kinesis",
-  "version": "1.0.6",
-  "description": "Easily create complex interactive animations.",
+  "version": "2.0.0",
+  "description": "CSS-native reactive motion for the web.",
   "main": "dist/kinesis.umd.js",
   "module": "dist/kinesis.es.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/kinesis.es.js",
+      "require": "./dist/kinesis.umd.js"
+    }
+  },
   "files": [
     "dist"
   ],
   "keywords": [
     "kinesis",
-    "animation",
-    "interactive",
-    "transformations"
+    "motion",
+    "css",
+    "interaction",
+    "parallax",
+    "tilt"
   ],
   "author": "Amine Bouyarmane",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/amineyarman/kinesis"
+    "url": "https://github.com/amineyarman/Kinesis.js"
   },
   "scripts": {
     "dev": "vite",
     "build": "vite build && tsc",
     "preview": "vite preview",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "vitest run"
   },
   "devDependencies": {
     "@types/node": "^22.5.5",
     "typescript": "^5.5.3",
     "vite": "^5.4.1",
-    "path": "^0.12.7"
+    "vitest": "^3.2.4"
   }
 }

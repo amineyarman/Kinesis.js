@@ -2,26 +2,19 @@
   "compilerOptions": {
     "target": "ES2020",
     "module": "ESNext",
-    "lib": [
-      "ES2020",
-      "DOM",
-      "DOM.Iterable"
-    ],
-    "moduleResolution": "node",
-    "outDir": "dist", // The output directory for the compiled files
-    "declaration": true, // Generate .d.ts declaration files
-    "declarationDir": "dist", // Place declaration files in the dist folder
-    "emitDeclarationOnly": true, // Only emit the declaration files (omit compiled JS)
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "moduleResolution": "bundler",
+    "outDir": "dist",
+    "declaration": true,
+    "declarationDir": "dist",
+    "emitDeclarationOnly": true,
     "isolatedModules": true,
     "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
     "esModuleInterop": true,
     "skipLibCheck": true
   },
-  "include": [
-    "src/**/*.ts"
-  ], // Include all .ts files in the src folder
-  "exclude": [
-    "node_modules",
-    "dist"
-  ] // Exclude unnecessary folders
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
 }
