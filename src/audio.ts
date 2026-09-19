@@ -10,6 +10,8 @@ export const audioBands = {
   treble: [6000, 16000],
 } as const
 
+const audioBandNames = Object.keys(audioBands) as (keyof typeof audioBands)[]
+
 export type AudioBandName = keyof typeof audioBands | "peak"
 
 export type AudioSourceInput =
@@ -68,6 +70,7 @@ export class KinesisAudio {
   private media: HTMLMediaElement | undefined
   private stream: MediaStream | undefined
   private bins = new Uint8Array(0)
+  private bandSpans: Array<readonly [keyof typeof audioBands, number, number]> = []
   private levels: Record<string, number> = {
     volume: 0,
     bass: 0,
@@ -114,6 +117,7 @@ export class KinesisAudio {
       this.context = resolved.context as AudioContext
       this.ownsContext = false
       this.bins = new Uint8Array(this.analyser.frequencyBinCount)
+      this.cacheBands()
       this.connected = true
       this.wake()
       return this
@@ -127,6 +131,7 @@ export class KinesisAudio {
     this.analyser.fftSize = 2048
     this.analyser.smoothingTimeConstant = 0.8
     this.bins = new Uint8Array(this.analyser.frequencyBinCount)
+    this.cacheBands()
 
     if (resolved instanceof AudioNode) {
       this.sourceNode = resolved
@@ -224,15 +229,14 @@ export class KinesisAudio {
 
   sample(): boolean {
     if (!this.analyser || !this.connected) return false
+    if (this.media?.paused) return false
     this.analyser.getByteFrequencyData(this.bins)
-    const sampleRate = this.analyser.context.sampleRate
-    const fftSize = this.analyser.fftSize
-    ;(Object.keys(audioBands) as (keyof typeof audioBands)[]).forEach((name) => {
-      const [fromHz, toHz] = audioBands[name]
-      const from = hzToBin(fromHz, sampleRate, fftSize)
-      const to = hzToBin(toHz, sampleRate, fftSize)
-      this.levels[name] = bandEnergy(this.bins, from, to)
-    })
+    const spans = this.bandSpans
+    for (let index = 0; index < spans.length; index += 1) {
+      const span = spans[index]
+      if (!span) continue
+      this.levels[span[0]] = bandEnergy(this.bins, span[1], span[2])
+    }
     this.levels.peak = peakEnergy(this.bins)
     const volume = this.levels.volume ?? 0
     this.levels.beat = volume - this.previousVolume > 0.12 ? 1 : (this.levels.beat ?? 0) * 0.72
@@ -254,6 +258,16 @@ export class KinesisAudio {
     if (this.ownsContext) void this.context?.close()
     this.context = undefined
     this.connected = false
+  }
+
+  private cacheBands(): void {
+    if (!this.analyser) return
+    const sampleRate = this.analyser.context.sampleRate
+    const fftSize = this.analyser.fftSize
+    this.bandSpans = audioBandNames.map((name) => {
+      const [fromHz, toHz] = audioBands[name]
+      return [name, hzToBin(fromHz, sampleRate, fftSize), hzToBin(toHz, sampleRate, fftSize)] as const
+    })
   }
 
   private wake(): void {

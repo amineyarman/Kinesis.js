@@ -156,6 +156,7 @@ export function parseTargetConfig(style: CSSStyleDeclaration): TargetConfig {
   const [followOffsetX, followOffsetY] = parsePair(read(style, "--k-follow-offset") || "0px", lengthToPx)
   const pathRaw = read(style, "--k-path")
   const audioBinRaw = read(style, "--k-audio-bin")
+  const [audioScaleMin, audioScaleMax] = parsePair(read(style, "--k-audio-scale") || "1 1.2", Number.parseFloat)
 
   return {
     enabled: read(style, "--k-enabled") !== "0",
@@ -193,8 +194,8 @@ export function parseTargetConfig(style: CSSStyleDeclaration): TargetConfig {
     pathStrength: Number.parseFloat(read(style, "--k-path-strength") || "1") || 1,
     audioBand: read(style, "--k-audio-band") || "none",
     audioBin: audioBinRaw && audioBinRaw !== "none" ? Number.parseInt(audioBinRaw, 10) : -1,
-    audioScaleMin: parsePair(read(style, "--k-audio-scale") || "1 1.2", Number.parseFloat)[0],
-    audioScaleMax: parsePair(read(style, "--k-audio-scale") || "1 1.2", Number.parseFloat)[1],
+    audioScaleMin,
+    audioScaleMax,
     springStiffness: Number.parseFloat(read(style, "--k-spring-stiffness") || "180") || 180,
     springDamping: Number.parseFloat(read(style, "--k-spring-damping") || "22") || 22,
     springMass: Number.parseFloat(read(style, "--k-spring-mass") || "1") || 1,
@@ -231,17 +232,61 @@ export interface PointerState {
   ny: number
 }
 
+export interface LayoutBox {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+export const CHANNELS: (keyof MotionOutput)[] = [
+  "x",
+  "y",
+  "z",
+  "rotateX",
+  "rotateY",
+  "rotateZ",
+  "scaleX",
+  "scaleY",
+  "path",
+]
+
+export function restOutput(into?: MotionOutput): MotionOutput {
+  const output = into ?? {
+    x: 0,
+    y: 0,
+    z: 0,
+    rotateX: 0,
+    rotateY: 0,
+    rotateZ: 0,
+    scaleX: 1,
+    scaleY: 1,
+    path: 0,
+  }
+  output.x = 0
+  output.y = 0
+  output.z = 0
+  output.rotateX = 0
+  output.rotateY = 0
+  output.rotateZ = 0
+  output.scaleX = 1
+  output.scaleY = 1
+  output.path = 0
+  return output
+}
+
 export function computeOutput(
   config: TargetConfig,
   pointer: PointerState,
-  rect: DOMRect,
+  rect: LayoutBox,
   scrollProgress: number,
   reduceMotion: boolean,
   audioLevel = 0,
   source = "pointer",
   delayed?: PointerState,
+  into?: MotionOutput,
 ): MotionOutput {
-  const output: MotionOutput = { x: 0, y: 0, z: 0, rotateX: 0, rotateY: 0, rotateZ: 0, scaleX: 1, scaleY: 1, path: 0 }
+  const output = restOutput(into)
   if (!config.enabled || reduceMotion) return output
 
   let nx = pointer.nx
@@ -260,41 +305,46 @@ export function computeOutput(
   output.rotateZ += config.scrollRotate * scrollProgress * intensity
   if (config.path) output.path = clamp(scrollProgress * 100 * config.pathStrength, 0, 100)
 
-  const cx = rect.left + rect.width / 2
-  const cy = rect.top + rect.height / 2
-  const dx = pointer.x - cx
-  const dy = pointer.y - cy
-  const dist = Math.hypot(dx, dy) || 1
-  const ux = dx / dist
-  const uy = dy / dist
-
-  if (config.magneticRadius > 0) {
-    const t = 1 - clamp(dist / config.magneticRadius, 0, 1)
-    const strength = falloff(t, config.magneticFalloff) * config.magneticForce * intensity
-    const pull = strength * Math.min(dist, config.magneticRadius)
-    if (config.magneticAxis !== "y") output.x += ux * pull
-    if (config.magneticAxis !== "x") output.y += uy * pull
-  }
-
-  if (config.attract !== 0 && dist < config.attractRadius) {
-    const t = 1 - dist / config.attractRadius
-    const pull = falloff(t, "smooth") * config.attract * intensity
-    output.x += ux * pull
-    output.y += uy * pull
-  }
-
-  if (config.repel !== 0 && dist < config.repelRadius) {
-    const t = 1 - dist / config.repelRadius
-    const push = falloff(t, "smooth") * config.repel * intensity
-    output.x -= ux * push
-    output.y -= uy * push
-  }
-
   const following = config.follow !== "none" && config.follow !== ""
-  if (following || config.trail > 0) {
-    const chase = config.trail > 0 && delayed ? delayed : pointer
-    output.x += (chase.x - cx) * intensity + (following ? config.followOffsetX : 0)
-    output.y += (chase.y - cy) * intensity + (following ? config.followOffsetY : 0)
+  const needsDistance =
+    config.magneticRadius > 0 || config.attract !== 0 || config.repel !== 0 || following || config.trail > 0
+
+  if (needsDistance) {
+    const cx = rect.left + rect.width / 2
+    const cy = rect.top + rect.height / 2
+    const dx = pointer.x - cx
+    const dy = pointer.y - cy
+    const dist = Math.hypot(dx, dy) || 1
+    const ux = dx / dist
+    const uy = dy / dist
+
+    if (config.magneticRadius > 0) {
+      const t = 1 - clamp(dist / config.magneticRadius, 0, 1)
+      const strength = falloff(t, config.magneticFalloff) * config.magneticForce * intensity
+      const pull = strength * Math.min(dist, config.magneticRadius)
+      if (config.magneticAxis !== "y") output.x += ux * pull
+      if (config.magneticAxis !== "x") output.y += uy * pull
+    }
+
+    if (config.attract !== 0 && dist < config.attractRadius) {
+      const t = 1 - dist / config.attractRadius
+      const pull = falloff(t, "smooth") * config.attract * intensity
+      output.x += ux * pull
+      output.y += uy * pull
+    }
+
+    if (config.repel !== 0 && dist < config.repelRadius) {
+      const t = 1 - dist / config.repelRadius
+      const push = falloff(t, "smooth") * config.repel * intensity
+      output.x -= ux * push
+      output.y -= uy * push
+    }
+
+    if (following || config.trail > 0) {
+      const chase = config.trail > 0 && delayed ? delayed : pointer
+      output.x += (chase.x - cx) * intensity + (following ? config.followOffsetX : 0)
+      output.y += (chase.y - cy) * intensity + (following ? config.followOffsetY : 0)
+    }
   }
 
   output.x += config.scrollX * scrollProgress * intensity
@@ -330,12 +380,38 @@ export class TargetRuntime {
   config: TargetConfig
   bindings: Partial<Record<keyof MotionOutput, KSignal>> = {}
   paused = false
-  rect: DOMRect | undefined
+  rect: LayoutBox | undefined
+  busy = false
+  proximityOnly = false
+  proximityRadius = 0
+  usesAudio = false
+  usesPath = false
+  readonly scratch: MotionOutput = restOutput()
   private springs: Record<keyof MotionOutput, Spring>
-  private lastTransform = ""
+  private drive: Record<keyof MotionOutput, boolean> = {
+    x: false,
+    y: false,
+    z: false,
+    rotateX: false,
+    rotateY: false,
+    rotateZ: false,
+    scaleX: false,
+    scaleY: false,
+    path: false,
+  }
   private lastOrigin = ""
   private lastOffsetPath = ""
   private lastOffsetDistance = ""
+  private drawnX = NaN
+  private drawnY = NaN
+  private drawnZ = NaN
+  private drawnRx = NaN
+  private drawnRy = NaN
+  private drawnRz = NaN
+  private drawnSx = NaN
+  private drawnSy = NaN
+  private drawnPath = NaN
+  private bound = false
 
   constructor(element: HTMLElement, config: TargetConfig) {
     this.element = element
@@ -353,14 +429,64 @@ export class TargetRuntime {
       scaleY: make(1),
       path: make(),
     }
+    this.syncDrive()
   }
 
   refresh(config: TargetConfig): void {
     this.config = config
     const preset = motionPreset(config)
-    ;(Object.keys(this.springs) as (keyof MotionOutput)[]).forEach((key) => {
-      this.springs[key].setPreset(preset.stiffness, preset.damping, preset.mass)
-    })
+    for (let index = 0; index < CHANNELS.length; index += 1) {
+      this.springs[CHANNELS[index]!].setPreset(preset.stiffness, preset.damping, preset.mass)
+    }
+    this.syncDrive()
+  }
+
+  syncDrive(): void {
+    const config = this.config
+    const follow = config.follow !== "none" && config.follow !== ""
+    const audio = config.audioBin >= 0 || (config.audioBand !== "none" && config.audioBand !== "")
+    const pull = config.magneticRadius > 0 || config.attract !== 0 || config.repel !== 0
+    this.bound = CHANNELS.some((key) => !!this.bindings[key])
+    this.drive.x = !!(config.parallaxX || pull || follow || config.trail || config.scrollX || this.bindings.x)
+    this.drive.y = !!(config.parallaxY || pull || follow || config.trail || config.scrollY || this.bindings.y)
+    this.drive.z = !!(config.depth || this.bindings.z)
+    this.drive.rotateX = !!(config.tiltX || this.bindings.rotateX)
+    this.drive.rotateY = !!(config.tiltY || this.bindings.rotateY)
+    this.drive.rotateZ = !!(config.rotate || config.scrollRotate || this.bindings.rotateZ)
+    this.drive.scaleX = !!((audio && config.audioBin < 0) || this.bindings.scaleX)
+    this.drive.scaleY = !!(audio || this.bindings.scaleY)
+    this.drive.path = !!(config.path || this.bindings.path)
+    this.usesAudio = audio
+    this.usesPath = !!config.path
+    this.proximityOnly =
+      pull &&
+      !this.bound &&
+      !config.parallaxX &&
+      !config.parallaxY &&
+      !config.tiltX &&
+      !config.tiltY &&
+      !config.depth &&
+      !config.rotate &&
+      !config.scrollX &&
+      !config.scrollY &&
+      !config.scrollRotate &&
+      !config.path &&
+      !audio &&
+      !follow &&
+      !config.trail
+    this.proximityRadius = Math.max(
+      config.repel ? config.repelRadius : 0,
+      config.attract ? config.attractRadius : 0,
+      config.magneticRadius,
+    )
+  }
+
+  outsideProximity(pointer: PointerState): boolean {
+    if (!this.proximityOnly || !this.rect) return false
+    const dx = pointer.x - (this.rect.left + this.rect.width / 2)
+    const dy = pointer.y - (this.rect.top + this.rect.height / 2)
+    const radius = this.proximityRadius
+    return dx * dx + dy * dy >= radius * radius
   }
 
   apply(output: MotionOutput, dt: number, reduceMotion: boolean): boolean {
@@ -370,7 +496,7 @@ export class TargetRuntime {
       this.element.style.transformOrigin = origin
       this.lastOrigin = origin
     }
-    if (this.config.path) {
+    if (this.usesPath) {
       const raw = this.config.path.trim()
       const offsetPath = raw.startsWith("url(") || raw.startsWith("#")
         ? raw.startsWith("#")
@@ -385,43 +511,74 @@ export class TargetRuntime {
     }
 
     let active = false
-    ;(Object.keys(this.bindings) as (keyof MotionOutput)[]).forEach((key) => {
-      const signal = this.bindings[key]
-      if (!signal) return
-      signal.step(dt)
-      output[key] += signal.value
-    })
-    ;(Object.keys(this.springs) as (keyof MotionOutput)[]).forEach((key) => {
-      this.springs[key].target = reduceMotion
-        ? key === "scaleX" || key === "scaleY"
-          ? 1
-          : 0
-        : output[key]
-      if (this.config.motion === "instant" || reduceMotion) {
-        this.springs[key].value = this.springs[key].target
-        this.springs[key].velocity = 0
-      } else if (this.springs[key].step(dt)) {
-        active = true
-      }
-    })
-
-    if (this.config.path) {
-      const distance = `${this.springs.path.value.toFixed(2)}%`
-      if (distance !== this.lastOffsetDistance) {
-        this.element.style.offsetDistance = distance
-        this.lastOffsetDistance = distance
-      }
-      if (this.lastTransform) {
-        this.element.style.transform = ""
-        this.lastTransform = ""
-      }
-    } else {
-      const transform = `translate3d(${this.springs.x.value.toFixed(2)}px, ${this.springs.y.value.toFixed(2)}px, ${this.springs.z.value.toFixed(2)}px) rotateX(${this.springs.rotateX.value.toFixed(3)}deg) rotateY(${this.springs.rotateY.value.toFixed(3)}deg) rotateZ(${this.springs.rotateZ.value.toFixed(3)}deg) scale3d(${this.springs.scaleX.value.toFixed(3)}, ${this.springs.scaleY.value.toFixed(3)}, 1)`
-      if (transform !== this.lastTransform) {
-        this.element.style.transform = transform
-        this.lastTransform = transform
+    if (this.bound) {
+      for (let index = 0; index < CHANNELS.length; index += 1) {
+        const key = CHANNELS[index]!
+        const signal = this.bindings[key]
+        if (!signal) continue
+        signal.step(dt)
+        output[key] += signal.value
       }
     }
+    const instant = this.config.motion === "instant" || reduceMotion
+    for (let index = 0; index < CHANNELS.length; index += 1) {
+      const key = CHANNELS[index]!
+      const spring = this.springs[key]
+      const rest = key === "scaleX" || key === "scaleY" ? 1 : 0
+      spring.target = reduceMotion || !this.drive[key] ? rest : output[key]
+      if (instant) {
+        spring.value = spring.target
+        spring.velocity = 0
+      } else if (!spring.settled()) {
+        if (spring.step(dt)) active = true
+      }
+    }
+
+    if (this.usesPath) {
+      const path = this.springs.path.value
+      if (path !== this.drawnPath) {
+        this.drawnPath = path
+        const distance = `${path.toFixed(2)}%`
+        if (distance !== this.lastOffsetDistance) {
+          this.element.style.offsetDistance = distance
+          this.lastOffsetDistance = distance
+        }
+      }
+      if (this.drawnX === this.drawnX) {
+        this.element.style.transform = ""
+        this.drawnX = NaN
+      }
+    } else {
+      const x = this.springs.x.value
+      const y = this.springs.y.value
+      const z = this.springs.z.value
+      const rx = this.springs.rotateX.value
+      const ry = this.springs.rotateY.value
+      const rz = this.springs.rotateZ.value
+      const sx = this.springs.scaleX.value
+      const sy = this.springs.scaleY.value
+      if (
+        x !== this.drawnX ||
+        y !== this.drawnY ||
+        z !== this.drawnZ ||
+        rx !== this.drawnRx ||
+        ry !== this.drawnRy ||
+        rz !== this.drawnRz ||
+        sx !== this.drawnSx ||
+        sy !== this.drawnSy
+      ) {
+        this.drawnX = x
+        this.drawnY = y
+        this.drawnZ = z
+        this.drawnRx = rx
+        this.drawnRy = ry
+        this.drawnRz = rz
+        this.drawnSx = sx
+        this.drawnSy = sy
+        this.element.style.transform = `translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, ${z.toFixed(2)}px) rotateX(${rx.toFixed(3)}deg) rotateY(${ry.toFixed(3)}deg) rotateZ(${rz.toFixed(3)}deg) scale3d(${sx.toFixed(3)}, ${sy.toFixed(3)}, 1)`
+      }
+    }
+    this.busy = active
     return active
   }
 

@@ -60,8 +60,12 @@ export class Spring {
     this.mass = mass
   }
 
+  settled(): boolean {
+    return Math.abs(this.value - this.target) < 0.02 && Math.abs(this.velocity) < 0.02
+  }
+
   step(dt: number): boolean {
-    if (Math.abs(this.value - this.target) < 0.02 && Math.abs(this.velocity) < 0.02) {
+    if (this.settled()) {
       this.value = this.target
       this.velocity = 0
       return false

@@ -2,6 +2,7 @@ import {
   computeOutput,
   isMotionTarget,
   parseTargetConfig,
+  restOutput,
   shouldReduceMotion,
   TargetRuntime,
   type MotionOutput,
@@ -176,6 +177,7 @@ function createHandle(element: HTMLElement, runtime: ScopeRuntime): MotionHandle
     bind(bindings) {
       const target = runtime.ensureTarget(element)
       target.bindings = { ...target.bindings, ...bindings }
+      target.syncDrive()
       runtime.resume()
       return this
     },
@@ -222,6 +224,7 @@ function createHandle(element: HTMLElement, runtime: ScopeRuntime): MotionHandle
 const windowHub = {
   members: new Set<ScopeRuntime>(),
   hooked: false,
+  scrollRaf: 0,
   add(scope: ScopeRuntime) {
     this.members.add(scope)
     if (this.hooked) return
@@ -237,6 +240,10 @@ const windowHub = {
     this.members.delete(scope)
     if (this.members.size || !this.hooked) return
     this.hooked = false
+    if (this.scrollRaf) {
+      window.cancelAnimationFrame(this.scrollRaf)
+      this.scrollRaf = 0
+    }
     window.removeEventListener("scroll", this.scroll)
     window.removeEventListener("resize", this.resize)
     window.removeEventListener("pointerdown", this.press)
@@ -245,7 +252,15 @@ const windowHub = {
     window.removeEventListener("deviceorientation", this.orient)
   },
   scroll() {
-    windowHub.members.forEach((scope) => scope.handleWindowScroll())
+    if (windowHub.scrollRaf) return
+    windowHub.scrollRaf = window.requestAnimationFrame(windowHub.flushScroll)
+  },
+  flushScroll() {
+    windowHub.scrollRaf = 0
+    const now = performance.now()
+    const x = window.scrollX || 0
+    const y = window.scrollY || 0
+    windowHub.members.forEach((scope) => scope.handleWindowScroll(now, x, y))
   },
   resize() {
     windowHub.members.forEach((scope) => scope.handleWindowResize())
@@ -273,16 +288,27 @@ class ScopeRuntime implements KinesisScope {
   private velocity = { x: 0, y: 0 }
   private lastPointer = { x: 0, y: 0, time: 0 }
   private pointerLog: Array<{ t: number; x: number; y: number }> = []
+  private logStart = 0
   private pointerInside = false
   private windowPointer = false
-  private rootRect: DOMRect | undefined
+  private rootRect: { left: number; top: number; width: number; height: number } | undefined
   private scopeConfig: TargetConfig | undefined
   private measuredScrollX = 0
   private measuredScrollY = 0
   private lastViewProgress = -1
+  private perspectiveCss = ""
   private sceneRx = new Spring(180, 22, 1)
   private sceneRy = new Spring(180, 22, 1)
   private lastSceneTransform = ""
+  private sceneEl: HTMLElement | undefined
+  private sceneMotion = ""
+  private scrollDriven = false
+  private orientDriven = false
+  private depthScene = false
+  private threeD = false
+  private layoutScroll = false
+  private pointerScratch: PointerState = { x: 0, y: 0, nx: 0, ny: 0 }
+  private delayedScratch: PointerState = { x: 0, y: 0, nx: 0, ny: 0 }
   private frame = 0
   private lastTime = 0
   private paused = false
@@ -358,16 +384,23 @@ class ScopeRuntime implements KinesisScope {
       this.pointerState.x = event.clientX
       this.pointerState.y = event.clientY
       this.pointerLog.push({ t: now, x: event.clientX, y: event.clientY })
-      while (this.pointerLog.length && now - (this.pointerLog[0]?.t ?? now) > 2000) this.pointerLog.shift()
-      const rect = this.rootRect ?? this.root.getBoundingClientRect()
+      while (this.logStart < this.pointerLog.length && now - (this.pointerLog[this.logStart]?.t ?? now) > 2000) {
+        this.logStart += 1
+      }
+      if (this.logStart > 64) {
+        this.pointerLog.splice(0, this.logStart)
+        this.logStart = 0
+      }
+      const rect = this.rootRect ?? this.copyBox(this.root.getBoundingClientRect())
       this.pointerState.localX = event.clientX - rect.left
       this.pointerState.localY = event.clientY - rect.top
       const localX = rect.width ? (this.pointerState.localX / rect.width) * 2 - 1 : 0
       const localY = rect.height ? (this.pointerState.localY / rect.height) * 2 - 1 : 0
       const viewX = window.innerWidth ? (event.clientX / window.innerWidth) * 2 - 1 : 0
       const viewY = window.innerHeight ? (event.clientY / window.innerHeight) * 2 - 1 : 0
-      this.pointerState.nx = this.space() === "viewport" ? viewX : localX
-      this.pointerState.ny = this.space() === "viewport" ? viewY : localY
+      const space = this.space()
+      this.pointerState.nx = space === "viewport" ? viewX : localX
+      this.pointerState.ny = space === "viewport" ? viewY : localY
       this.kick()
     }
     this.windowPointer = this.root.dataset.kinesisPointer === "window"
@@ -420,10 +453,10 @@ class ScopeRuntime implements KinesisScope {
     this.kick()
   }
 
-  handleWindowScroll(): void {
-    this.captureScroll()
-    this.syncScrollLayout()
-    if (this.usesScrollSource()) this.kick()
+  handleWindowScroll(now: number, x: number, y: number): void {
+    this.captureScroll(now, x, y)
+    this.layoutScroll = true
+    if (this.scrollDriven) this.kick()
   }
 
   handleWindowResize(): void {
@@ -433,7 +466,7 @@ class ScopeRuntime implements KinesisScope {
 
   handleWindowPress(event: PointerEvent): void {
     this.pointerState.pressed = event.type === "pointerdown" ? 1 : 0
-    this.kick()
+    if (this.pointerInside || this.windowPointer) this.kick()
   }
 
   handleWindowOrient(event: DeviceOrientationEvent): void {
@@ -445,24 +478,29 @@ class ScopeRuntime implements KinesisScope {
     if (!(DeviceOrientationEvent as typeof DeviceOrientationEvent & { requestPermission?: unknown }).requestPermission) {
       this.orientationState.granted = true
     }
-    if (this.usesOrientationSource()) this.kick()
+    if (this.orientDriven) this.kick()
   }
 
   private space(): string {
     return this.scopeConfig?.space || "local"
   }
 
+  private copyBox(rect: DOMRect): { left: number; top: number; width: number; height: number } {
+    return { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
+  }
+
   private scrollProgress(element: HTMLElement): number {
     const rect =
       element === this.root
-        ? this.rootRect ?? element.getBoundingClientRect()
-        : this.targets.get(element)?.rect ?? element.getBoundingClientRect()
+        ? this.rootRect ?? this.copyBox(element.getBoundingClientRect())
+        : this.targets.get(element)?.rect ?? this.copyBox(element.getBoundingClientRect())
     const view = window.innerHeight || 1
     return Math.min(1, Math.max(0, 1 - rect.top / (view + rect.height)))
   }
 
-  private nudgeRect(rect: DOMRect, dx: number, dy: number): DOMRect {
-    return new DOMRect(rect.x - dx, rect.y - dy, rect.width, rect.height)
+  private nudgeBox(rect: { left: number; top: number }, dx: number, dy: number): void {
+    rect.left -= dx
+    rect.top -= dy
   }
 
   private syncScrollLayout(): void {
@@ -471,42 +509,52 @@ class ScopeRuntime implements KinesisScope {
     const dx = x - this.measuredScrollX
     const dy = y - this.measuredScrollY
     if (dx || dy) {
-      if (this.rootRect) this.rootRect = this.nudgeRect(this.rootRect, dx, dy)
+      if (this.rootRect) this.nudgeBox(this.rootRect, dx, dy)
       this.targets.forEach((target) => {
-        if (target.rect) target.rect = this.nudgeRect(target.rect, dx, dy)
+        if (target.rect) this.nudgeBox(target.rect, dx, dy)
       })
     }
     this.measuredScrollX = x
     this.measuredScrollY = y
   }
 
-  private usesScrollSource(): boolean {
-    const configs = [this.scopeConfig, ...Array.from(this.targets.values()).map((target) => target.config)]
-    return configs.some(
-      (config) =>
-        !!config &&
-        (config.source === "scroll" ||
-          config.scrollX !== 0 ||
-          config.scrollY !== 0 ||
-          config.scrollRotate !== 0 ||
-          !!config.path),
-    )
-  }
-
-  private usesOrientationSource(): boolean {
-    const configs = [this.scopeConfig, ...Array.from(this.targets.values()).map((target) => target.config)]
-    return configs.some((config) => config?.source === "orientation")
+  private rememberSources(): void {
+    let scroll = false
+    let orient = false
+    let depth = false
+    let tilt = false
+    const consider = (config?: TargetConfig) => {
+      if (!config) return
+      if (
+        config.source === "scroll" ||
+        config.scrollX !== 0 ||
+        config.scrollY !== 0 ||
+        config.scrollRotate !== 0 ||
+        !!config.path
+      ) {
+        scroll = true
+      }
+      if (config.source === "orientation") orient = true
+      if (config.depth) depth = true
+      if (config.tiltX || config.tiltY || config.depth) tilt = true
+    }
+    consider(this.scopeConfig)
+    this.targets.forEach((target) => consider(target.config))
+    this.scrollDriven = scroll
+    this.orientDriven = orient
+    this.depthScene = depth
+    this.threeD = !!this.sceneEl || depth || tilt
   }
 
   private readScopeConfig(): TargetConfig {
-    this.scopeConfig = parseTargetConfig(getComputedStyle(this.root))
+    const style = getComputedStyle(this.root)
+    this.scopeConfig = parseTargetConfig(style)
+    const raw = style.getPropertyValue("--k-perspective").trim()
+    this.perspectiveCss = raw === "none" ? "" : raw || "1000px"
     return this.scopeConfig
   }
 
-  private captureScroll(): void {
-    const now = performance.now()
-    const y = window.scrollY || 0
-    const x = window.scrollX || 0
+  private captureScroll(now = performance.now(), x = window.scrollX || 0, y = window.scrollY || 0): void {
     if (this.lastScrollTime) {
       const dt = Math.max((now - this.lastScrollTime) / 1000, 0.001)
       this.scrollState.velocity = (y - this.lastScrollY) / dt
@@ -535,22 +583,22 @@ class ScopeRuntime implements KinesisScope {
   }
 
   private sceneNode(): HTMLElement {
-    return this.root.querySelector<HTMLElement>("[data-k-scene]") ?? this.root
+    return this.sceneEl ?? this.root
   }
 
   private applyScopeFrame(): void {
     this.root.style.transformStyle = "flat"
-    const raw = getComputedStyle(this.root).getPropertyValue("--k-perspective").trim()
-    const perspective = raw === "none" ? "" : raw || "1000px"
-    this.root.style.perspective = this.needs3d() && perspective ? perspective : ""
-    if (this.needs3d()) {
+    this.root.style.perspective = this.threeD && this.perspectiveCss ? this.perspectiveCss : ""
+    if (this.threeD) {
       const scene = this.sceneNode()
       if (scene !== this.root) this.open3dChain(scene)
       for (const target of this.targets.values()) {
         if (target.config.depth) this.open3dChain(target.element)
       }
     }
-    this.measureRoot()
+    this.measureAll()
+    this.layoutDirty = false
+    this.layoutScroll = false
   }
 
   private open3dChain(from: Element): void {
@@ -563,29 +611,29 @@ class ScopeRuntime implements KinesisScope {
     }
   }
 
-  private needs3d(): boolean {
-    if (this.sceneNode() !== this.root) return true
-    if (this.hasDepthScene()) return true
-    const root = parseTargetConfig(getComputedStyle(this.root))
-    if (root.tiltX || root.tiltY || root.depth) return true
-    for (const target of this.targets.values()) {
-      if (target.config.tiltX || target.config.tiltY || target.config.depth) return true
-    }
-    return false
-  }
-
   private hasDepthScene(): boolean {
-    for (const target of this.targets.values()) {
-      if (target.config.depth !== 0) return true
-    }
-    return false
+    return this.depthScene
   }
 
-  private measureRoot(): void {
-    const previous = this.root.style.transform
-    this.root.style.transform = "none"
-    this.rootRect = this.root.getBoundingClientRect()
-    this.root.style.transform = previous
+  private measureAll(): void {
+    const restores: Array<{ node: HTMLElement; transform: string }> = []
+    const stash = (node: HTMLElement) => {
+      const transform = node.style.transform
+      if (transform && transform !== "none") {
+        node.style.transform = "none"
+        restores.push({ node, transform })
+      }
+    }
+    stash(this.root)
+    this.targets.forEach((target) => stash(target.element))
+    this.rootRect = this.copyBox(this.root.getBoundingClientRect())
+    this.targets.forEach((target) => {
+      target.rect = this.copyBox(target.element.getBoundingClientRect())
+    })
+    for (let index = 0; index < restores.length; index += 1) {
+      const item = restores[index]
+      if (item) item.node.style.transform = item.transform
+    }
     this.measuredScrollX = window.scrollX || 0
     this.measuredScrollY = window.scrollY || 0
   }
@@ -598,9 +646,13 @@ class ScopeRuntime implements KinesisScope {
     const config = this.scopeConfig ?? this.readScopeConfig()
     const tiltX = config.tiltX || 18
     const tiltY = config.tiltY || 18
-    const preset = getMotionPreset(config.motion || "soft")
-    this.sceneRx.setPreset(preset.stiffness, preset.damping, preset.mass)
-    this.sceneRy.setPreset(preset.stiffness, preset.damping, preset.mass)
+    const motion = config.motion || "soft"
+    if (motion !== this.sceneMotion) {
+      const preset = getMotionPreset(motion)
+      this.sceneRx.setPreset(preset.stiffness, preset.damping, preset.mass)
+      this.sceneRy.setPreset(preset.stiffness, preset.damping, preset.mass)
+      this.sceneMotion = motion
+    }
     const pointer = this.inputFor(config, this.root)
     if (!this.pointerInside && this.resolveSource(config) === "pointer") {
       pointer.nx = 0
@@ -636,13 +688,14 @@ class ScopeRuntime implements KinesisScope {
 
   private measure(target: TargetRuntime): void {
     const previous = target.element.style.transform
-    target.element.style.transform = "none"
-    target.rect = target.element.getBoundingClientRect()
-    target.element.style.transform = previous
+    if (previous && previous !== "none") target.element.style.transform = "none"
+    target.rect = this.copyBox(target.element.getBoundingClientRect())
+    if (previous && previous !== "none") target.element.style.transform = previous
   }
 
   private scan(): void {
     this.readScopeConfig()
+    this.sceneEl = this.root.querySelector<HTMLElement>("[data-k-scene]") ?? undefined
     const nodes = [this.root, ...Array.from(this.root.querySelectorAll<HTMLElement>("*"))].filter((node) => this.owns(node))
     const seen = new Set<HTMLElement>()
     nodes.forEach((node) => {
@@ -660,6 +713,7 @@ class ScopeRuntime implements KinesisScope {
         this.targets.delete(node)
       }
     })
+    this.rememberSources()
   }
 
   private tick = (time: number) => {
@@ -675,13 +729,21 @@ class ScopeRuntime implements KinesisScope {
     this.audios.forEach((item) => {
       if (item.sample()) active = true
     })
-    if (this.layoutDirty || !this.rootRect) this.measureRoot()
+    if (this.layoutDirty || !this.rootRect) {
+      this.measureAll()
+      this.layoutDirty = false
+      this.layoutScroll = false
+    } else if (this.layoutScroll) {
+      this.syncScrollLayout()
+      this.layoutScroll = false
+    }
     const scopeConfig = this.scopeConfig ?? this.readScopeConfig()
     const reduceScene = shouldReduceMotion(scopeConfig, this.systemReduce)
     if (this.applyScene(dt, reduceScene)) active = true
+    const rootProgress = this.scrollDriven ? this.scrollProgress(this.root) : 0
     this.targets.forEach((target) => {
       if (target.paused) return
-      if (this.layoutDirty || !target.rect) this.measure(target)
+      if (!target.rect) this.measure(target)
       const config = target.config
       const reduce = shouldReduceMotion(config, this.systemReduce)
       const source = this.resolveSource(config)
@@ -692,31 +754,40 @@ class ScopeRuntime implements KinesisScope {
         pointer.x = target.rect.left + target.rect.width / 2
         pointer.y = target.rect.top + target.rect.height / 2
       }
-      const delayed = this.pointerAt(config.trail * 100)
-      const audio = this.audioFor.get(target.element) ?? this.audios[this.audios.length - 1]
-      const audioLevel = audio
-        ? config.audioBin >= 0
-          ? audio.binLevel(config.audioBin)
-          : config.audioBand !== "none"
-            ? audio.level(config.audioBand)
-            : 0
-        : 0
+      const culled = target.outsideProximity(pointer)
+      if (culled && !target.busy) return
+      if (culled) {
+        if (target.apply(restOutput(target.scratch), dt, reduce)) active = true
+        return
+      }
+      const delayed = config.trail > 0 ? this.pointerAt(config.trail * 100) : undefined
+      let audioLevel = 0
+      if (target.usesAudio) {
+        const audio = this.audioFor.get(target.element) ?? this.audios[this.audios.length - 1]
+        audioLevel = audio
+          ? config.audioBin >= 0
+            ? audio.binLevel(config.audioBin)
+            : config.audioBand !== "none"
+              ? audio.level(config.audioBand)
+              : 0
+          : 0
+      }
       const output = computeOutput(
         config,
         pointer,
-        target.rect,
-        config.path ? this.scrollProgress(this.root) : this.scrollProgress(target.element),
+        target.rect ?? { left: 0, top: 0, width: 0, height: 0 },
+        target.usesPath ? rootProgress : this.scrollProgress(target.element),
         reduce,
         audioLevel,
         source,
         delayed,
+        target.scratch,
       )
       if (target.apply(output, dt, reduce)) active = true
     })
-    if (this.usesScrollSource()) {
-      const viewProgress = this.scrollProgress(this.root)
-      if (Math.abs(viewProgress - this.lastViewProgress) > 0.0008) active = true
-      this.lastViewProgress = viewProgress
+    if (this.scrollDriven) {
+      if (Math.abs(rootProgress - this.lastViewProgress) > 0.0008) active = true
+      this.lastViewProgress = rootProgress
       if (Math.abs(this.scrollState.velocity) > 0.4) active = true
     }
     this.layoutDirty = false
@@ -736,6 +807,7 @@ class ScopeRuntime implements KinesisScope {
   dropTarget(element: HTMLElement): void {
     this.targets.get(element)?.destroy()
     this.targets.delete(element)
+    this.rememberSources()
   }
 
   ensureTarget(element: HTMLElement): TargetRuntime {
@@ -744,6 +816,7 @@ class ScopeRuntime implements KinesisScope {
     const config = parseTargetConfig(getComputedStyle(element))
     const target = new TargetRuntime(element, config)
     this.targets.set(element, target)
+    this.rememberSources()
     return target
   }
 
@@ -766,29 +839,50 @@ class ScopeRuntime implements KinesisScope {
   }
 
   private pointerAt(age: number): PointerState {
-    if (age <= 0 || !this.pointerLog.length) return { ...this.pointerState }
+    const delayed = this.delayedScratch
+    delayed.x = this.pointerState.x
+    delayed.y = this.pointerState.y
+    delayed.nx = this.pointerState.nx
+    delayed.ny = this.pointerState.ny
+    if (age <= 0 || this.logStart >= this.pointerLog.length) return delayed
     const t = performance.now() - age
-    for (let index = this.pointerLog.length - 1; index >= 0; index -= 1) {
+    for (let index = this.pointerLog.length - 1; index >= this.logStart; index -= 1) {
       const sample = this.pointerLog[index]
-      if (sample && sample.t <= t) return { ...this.pointerState, x: sample.x, y: sample.y }
+      if (sample && sample.t <= t) {
+        delayed.x = sample.x
+        delayed.y = sample.y
+        return delayed
+      }
     }
-    const first = this.pointerLog[0]
-    return first ? { ...this.pointerState, x: first.x, y: first.y } : { ...this.pointerState }
+    const first = this.pointerLog[this.logStart]
+    if (first) {
+      delayed.x = first.x
+      delayed.y = first.y
+    }
+    return delayed
   }
 
   private inputFor(config: TargetConfig, element: HTMLElement): PointerState {
+    const pointer = this.pointerScratch
+    pointer.x = this.pointerState.x
+    pointer.y = this.pointerState.y
     const source = this.resolveSource(config)
     if (source === "orientation") {
-      return { x: this.pointerState.x, y: this.pointerState.y, nx: this.orientationState.nx, ny: this.orientationState.ny }
+      pointer.nx = this.orientationState.nx
+      pointer.ny = this.orientationState.ny
+      return pointer
     }
     if (source === "scroll") {
-      const ny = this.scrollProgress(element) * 2 - 1
-      return { x: this.pointerState.x, y: this.pointerState.y, nx: 0, ny }
+      pointer.nx = 0
+      pointer.ny = this.scrollProgress(element) * 2 - 1
+      return pointer
     }
-    const pointer = { ...this.pointerState }
     if (config.space === "viewport") {
       pointer.nx = window.innerWidth ? (this.pointerState.x / window.innerWidth) * 2 - 1 : 0
       pointer.ny = window.innerHeight ? (this.pointerState.y / window.innerHeight) * 2 - 1 : 0
+    } else {
+      pointer.nx = this.pointerState.nx
+      pointer.ny = this.pointerState.ny
     }
     return pointer
   }
