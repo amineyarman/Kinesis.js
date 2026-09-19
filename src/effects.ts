@@ -333,6 +333,9 @@ export class TargetRuntime {
   rect: DOMRect | undefined
   private springs: Record<keyof MotionOutput, Spring>
   private lastTransform = ""
+  private lastOrigin = ""
+  private lastOffsetPath = ""
+  private lastOffsetDistance = ""
 
   constructor(element: HTMLElement, config: TargetConfig) {
     this.element = element
@@ -363,15 +366,22 @@ export class TargetRuntime {
   apply(output: MotionOutput, dt: number, reduceMotion: boolean): boolean {
     if (this.paused) return false
     const origin = this.config.tiltOrigin || "center"
-    this.element.style.transformOrigin = origin
+    if (origin !== this.lastOrigin) {
+      this.element.style.transformOrigin = origin
+      this.lastOrigin = origin
+    }
     if (this.config.path) {
       const raw = this.config.path.trim()
-      this.element.style.offsetPath = raw.startsWith("url(") || raw.startsWith("#")
+      const offsetPath = raw.startsWith("url(") || raw.startsWith("#")
         ? raw.startsWith("#")
           ? `url(${raw})`
           : raw
         : `path("${raw.replace(/"/g, "")}")`
-      this.element.style.offsetRotate = "auto"
+      if (offsetPath !== this.lastOffsetPath) {
+        this.element.style.offsetPath = offsetPath
+        this.element.style.offsetRotate = "auto"
+        this.lastOffsetPath = offsetPath
+      }
     }
 
     let active = false
@@ -396,9 +406,15 @@ export class TargetRuntime {
     })
 
     if (this.config.path) {
-      this.element.style.offsetDistance = `${this.springs.path.value.toFixed(2)}%`
-      this.element.style.transform = ""
-      this.lastTransform = ""
+      const distance = `${this.springs.path.value.toFixed(2)}%`
+      if (distance !== this.lastOffsetDistance) {
+        this.element.style.offsetDistance = distance
+        this.lastOffsetDistance = distance
+      }
+      if (this.lastTransform) {
+        this.element.style.transform = ""
+        this.lastTransform = ""
+      }
     } else {
       const transform = `translate3d(${this.springs.x.value.toFixed(2)}px, ${this.springs.y.value.toFixed(2)}px, ${this.springs.z.value.toFixed(2)}px) rotateX(${this.springs.rotateX.value.toFixed(3)}deg) rotateY(${this.springs.rotateY.value.toFixed(3)}deg) rotateZ(${this.springs.rotateZ.value.toFixed(3)}deg) scale3d(${this.springs.scaleX.value.toFixed(3)}, ${this.springs.scaleY.value.toFixed(3)}, 1)`
       if (transform !== this.lastTransform) {

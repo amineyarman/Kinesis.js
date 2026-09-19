@@ -219,6 +219,45 @@ function createHandle(element: HTMLElement, runtime: ScopeRuntime): MotionHandle
   }
 }
 
+const windowHub = {
+  members: new Set<ScopeRuntime>(),
+  hooked: false,
+  add(scope: ScopeRuntime) {
+    this.members.add(scope)
+    if (this.hooked) return
+    this.hooked = true
+    window.addEventListener("scroll", this.scroll, { passive: true })
+    window.addEventListener("resize", this.resize, { passive: true })
+    window.addEventListener("pointerdown", this.press, { passive: true })
+    window.addEventListener("pointerup", this.press, { passive: true })
+    window.addEventListener("pointercancel", this.press, { passive: true })
+    window.addEventListener("deviceorientation", this.orient)
+  },
+  remove(scope: ScopeRuntime) {
+    this.members.delete(scope)
+    if (this.members.size || !this.hooked) return
+    this.hooked = false
+    window.removeEventListener("scroll", this.scroll)
+    window.removeEventListener("resize", this.resize)
+    window.removeEventListener("pointerdown", this.press)
+    window.removeEventListener("pointerup", this.press)
+    window.removeEventListener("pointercancel", this.press)
+    window.removeEventListener("deviceorientation", this.orient)
+  },
+  scroll() {
+    windowHub.members.forEach((scope) => scope.handleWindowScroll())
+  },
+  resize() {
+    windowHub.members.forEach((scope) => scope.handleWindowResize())
+  },
+  press(event: Event) {
+    windowHub.members.forEach((scope) => scope.handleWindowPress(event as PointerEvent))
+  },
+  orient(event: Event) {
+    windowHub.members.forEach((scope) => scope.handleWindowOrient(event as DeviceOrientationEvent))
+  },
+}
+
 class ScopeRuntime implements KinesisScope {
   root: HTMLElement
   pointer: PointerSignals
@@ -243,6 +282,7 @@ class ScopeRuntime implements KinesisScope {
   private lastViewProgress = -1
   private sceneRx = new Spring(180, 22, 1)
   private sceneRy = new Spring(180, 22, 1)
+  private lastSceneTransform = ""
   private frame = 0
   private lastTime = 0
   private paused = false
@@ -355,32 +395,8 @@ class ScopeRuntime implements KinesisScope {
       })
     }
 
-    const onPress = (event: PointerEvent) => {
-      this.pointerState.pressed = event.type === "pointerdown" ? 1 : 0
-      this.kick()
-    }
-    window.addEventListener("pointerdown", onPress, { passive: true })
-    window.addEventListener("pointerup", onPress, { passive: true })
-    window.addEventListener("pointercancel", onPress, { passive: true })
-    this.unbind.push(() => {
-      window.removeEventListener("pointerdown", onPress)
-      window.removeEventListener("pointerup", onPress)
-      window.removeEventListener("pointercancel", onPress)
-    })
-
-    const onScroll = () => {
-      this.captureScroll()
-      this.syncScrollLayout()
-      this.kick()
-    }
-    window.addEventListener("scroll", onScroll, { passive: true })
-    this.unbind.push(() => window.removeEventListener("scroll", onScroll))
-    const onResize = () => {
-      this.layoutDirty = true
-      this.invalidate()
-    }
-    window.addEventListener("resize", onResize, { passive: true })
-    this.unbind.push(() => window.removeEventListener("resize", onResize))
+    windowHub.add(this)
+    this.unbind.push(() => windowHub.remove(this))
     if (typeof ResizeObserver !== "undefined") {
       const resizeObserver = new ResizeObserver(() => {
         this.layoutDirty = true
@@ -400,27 +416,40 @@ class ScopeRuntime implements KinesisScope {
     this.unbind.push(() => observer.disconnect())
 
     this.captureScroll()
-
-    const onOrient = (event: DeviceOrientationEvent) => {
-      if (event.beta == null && event.gamma == null) return
-      this.orientationState.beta = event.beta ?? 0
-      this.orientationState.gamma = event.gamma ?? 0
-      this.orientationState.nx = clamp((event.gamma ?? 0) / 45, -1, 1)
-      this.orientationState.ny = clamp((event.beta ?? 0) / 45, -1, 1)
-      if (!(DeviceOrientationEvent as typeof DeviceOrientationEvent & { requestPermission?: unknown }).requestPermission) {
-        this.orientationState.granted = true
-      }
-      this.kick()
-    }
-    window.addEventListener("deviceorientation", onOrient)
-    this.unbind.push(() => window.removeEventListener("deviceorientation", onOrient))
-
     this.refresh()
     this.kick()
   }
 
+  handleWindowScroll(): void {
+    this.captureScroll()
+    this.syncScrollLayout()
+    if (this.usesScrollSource()) this.kick()
+  }
+
+  handleWindowResize(): void {
+    this.layoutDirty = true
+    this.invalidate()
+  }
+
+  handleWindowPress(event: PointerEvent): void {
+    this.pointerState.pressed = event.type === "pointerdown" ? 1 : 0
+    this.kick()
+  }
+
+  handleWindowOrient(event: DeviceOrientationEvent): void {
+    if (event.beta == null && event.gamma == null) return
+    this.orientationState.beta = event.beta ?? 0
+    this.orientationState.gamma = event.gamma ?? 0
+    this.orientationState.nx = clamp((event.gamma ?? 0) / 45, -1, 1)
+    this.orientationState.ny = clamp((event.beta ?? 0) / 45, -1, 1)
+    if (!(DeviceOrientationEvent as typeof DeviceOrientationEvent & { requestPermission?: unknown }).requestPermission) {
+      this.orientationState.granted = true
+    }
+    if (this.usesOrientationSource()) this.kick()
+  }
+
   private space(): string {
-    return getComputedStyle(this.root).getPropertyValue("--k-space").trim() || "local"
+    return this.scopeConfig?.space || "local"
   }
 
   private scrollProgress(element: HTMLElement): number {
@@ -462,6 +491,11 @@ class ScopeRuntime implements KinesisScope {
           config.scrollRotate !== 0 ||
           !!config.path),
     )
+  }
+
+  private usesOrientationSource(): boolean {
+    const configs = [this.scopeConfig, ...Array.from(this.targets.values()).map((target) => target.config)]
+    return configs.some((config) => config?.source === "orientation")
   }
 
   private readScopeConfig(): TargetConfig {
@@ -588,7 +622,11 @@ class ScopeRuntime implements KinesisScope {
       if (this.sceneRx.step(dt)) active = true
       if (this.sceneRy.step(dt)) active = true
     }
-    scene.style.transform = `rotateX(${this.sceneRx.value.toFixed(3)}deg) rotateY(${this.sceneRy.value.toFixed(3)}deg)`
+    const transform = `rotateX(${this.sceneRx.value.toFixed(3)}deg) rotateY(${this.sceneRy.value.toFixed(3)}deg)`
+    if (transform !== this.lastSceneTransform) {
+      scene.style.transform = transform
+      this.lastSceneTransform = transform
+    }
     return active
   }
 

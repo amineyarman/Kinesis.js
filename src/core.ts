@@ -61,6 +61,11 @@ export class Spring {
   }
 
   step(dt: number): boolean {
+    if (Math.abs(this.value - this.target) < 0.02 && Math.abs(this.velocity) < 0.02) {
+      this.value = this.target
+      this.velocity = 0
+      return false
+    }
     const maxDt = Math.min(dt, 1 / 30)
     const displacement = this.value - this.target
     const accel = (-this.stiffness * displacement - this.damping * this.velocity) / this.mass
