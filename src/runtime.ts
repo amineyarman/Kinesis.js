@@ -21,6 +21,7 @@ import {
 import { SHAPE_CIRCLE, SHAPE_ELEMENT, SpatialHash } from "./field"
 import { KSignal } from "./signal"
 import { KinesisAudio, type AudioSourceInput } from "./audio"
+import { KinesisVideo, type VideoSourceInput } from "./video"
 import { registerCssProperties } from "./register"
 import { clamp, Spring } from "./core"
 import { getMotionPreset } from "./spec/motion-presets"
@@ -38,6 +39,7 @@ export interface MotionHandle {
   audio(value: { source: KinesisAudio; band?: string; scale?: number[]; motion?: string }): this
   orbit(value: { radius?: number; speed?: number; direction?: string; mode?: string; phase?: number }): this
   wake(value: { duration?: number; force?: number; radius?: number }): this
+  edge(value: { radius?: number; force?: number; box?: string }): this
   path(value: { d?: string; strength?: number; orient?: string }): this
   tether(value: { to?: string; length?: number; slack?: number; axis?: string }): this
   face(value: { to?: string; max?: number; axis?: string; invert?: boolean }): this
@@ -135,6 +137,7 @@ export interface KinesisScope {
   scroll: ScrollSignals
   motion(selector: string | HTMLElement): MotionHandle
   audio(source?: AudioSourceInput): KinesisAudio
+  video(source?: VideoSourceInput): KinesisVideo
   proximity(selector: string | HTMLElement): ProximitySignals
   inView(selector: string | HTMLElement): ViewSignals
   group(selector?: string | HTMLElement): GroupHandle
@@ -172,6 +175,9 @@ const PROPERTY_MAP: Record<string, string> = {
   wake: "--k-wake",
   wakeForce: "--k-wake-force",
   wakeRadius: "--k-wake-radius",
+  edge: "--k-edge",
+  edgeForce: "--k-edge-force",
+  edgeBox: "--k-edge-box",
   pathStrength: "--k-path-strength",
   pathOrient: "--k-path-orient",
   springStiffness: "--k-spring-stiffness",
@@ -211,6 +217,8 @@ function formatCssValue(name: string, value: string | number | number[]): string
     if (/tilt|rotate|face|bend|phase/.test(name)) return `${value}deg`
     if (
       name !== "--k-wake-force" &&
+      name !== "--k-edge-force" &&
+      name !== "--k-edge-box" &&
       (/force|intensity|depth|audio|spring|smoothing|vortex|spin|pull|speed|spread|scale|threshold|limit|invert|trail|strength/.test(name) ||
         name === "--k-motion" ||
         name === "--k-source")
@@ -301,6 +309,13 @@ function createHandle(element: HTMLElement, runtime: ScopeRuntime): MotionHandle
         wake: value.duration ?? 180,
         wakeForce: value.force ?? 28,
         wakeRadius: value.radius ?? 90,
+      })
+    },
+    edge(value) {
+      return this.set({
+        edge: value.radius ?? 48,
+        edgeForce: value.force ?? 24,
+        ...(value.box ? { edgeBox: value.box } : {}),
       })
     },
     tether(value) {
@@ -538,6 +553,7 @@ class ScopeRuntime implements KinesisScope {
   private media: MediaQueryList | undefined
   private unbind: Array<() => void> = []
   private audios: KinesisAudio[] = []
+  private videos: KinesisVideo[] = []
   private audioFor = new WeakMap<HTMLElement, KinesisAudio>()
   private list: TargetRuntime[] = []
   private named = new Map<string, { el: HTMLElement; box: { left: number; top: number; width: number; height: number } }>()
@@ -808,7 +824,7 @@ class ScopeRuntime implements KinesisScope {
         fields += 1
         if (target.proximityRadius > radius) radius = target.proximityRadius
       }
-      if (config.anchor === "parent" && target) {
+      if ((config.anchor === "parent" || config.edgeBox === "container") && target) {
         const parent = target.element.parentElement
         if (parent instanceof HTMLElement) this.parentEls.add(parent)
       }
@@ -1061,6 +1077,9 @@ class ScopeRuntime implements KinesisScope {
     this.audios.forEach((item) => {
       if (item.sample()) active = true
     })
+    this.videos.forEach((item) => {
+      if (item.sample()) active = true
+    })
     if (this.layoutDirty || !this.rootRect) {
       this.measureAll()
       this.layoutDirty = false
@@ -1148,7 +1167,7 @@ class ScopeRuntime implements KinesisScope {
         config,
         pointer,
         target.rect ?? { left: 0, top: 0, width: 0, height: 0 },
-        target.usesPath ? rootProgress : this.scrollProgress(target.element),
+        source === "video" ? this.videoProgress() : target.usesPath ? rootProgress : this.scrollProgress(target.element),
         reduce,
         audioLevel,
         source,
@@ -1215,6 +1234,18 @@ class ScopeRuntime implements KinesisScope {
     return instance
   }
 
+  video(source?: VideoSourceInput): KinesisVideo {
+    const instance = new KinesisVideo(source, () => this.kick())
+    this.videos.push(instance)
+    this.kick()
+    return instance
+  }
+
+  private videoProgress(): number {
+    const video = this.videos[this.videos.length - 1]
+    return video?.progressValue ?? 0
+  }
+
   private resolveSource(config: TargetConfig): string {
     if (config.source === "auto") return this.coarse && this.orientationState.granted ? "orientation" : "pointer"
     return config.source
@@ -1257,6 +1288,11 @@ class ScopeRuntime implements KinesisScope {
     if (source === "scroll") {
       pointer.nx = 0
       pointer.ny = this.scrollProgress(element) * 2 - 1
+      return pointer
+    }
+    if (source === "video") {
+      pointer.nx = 0
+      pointer.ny = this.videoProgress() * 2 - 1
       return pointer
     }
     if (config.space === "viewport") {
@@ -1505,6 +1541,33 @@ class ScopeRuntime implements KinesisScope {
     }
   }
 
+  private fillEdgeBox(target: TargetRuntime, ctx: ComputeContext): void {
+    const box = target.config.edgeBox
+    if (box === "viewport") {
+      ctx.boxLeft = 0
+      ctx.boxTop = 0
+      ctx.boxW = window.innerWidth || 0
+      ctx.boxH = window.innerHeight || 0
+      return
+    }
+    if (box === "container") {
+      const parent = target.element.parentElement
+      const frame = parent instanceof HTMLElement ? this.parents.get(parent) ?? this.targets.get(parent)?.rect : undefined
+      if (frame) {
+        ctx.boxLeft = frame.left
+        ctx.boxTop = frame.top
+        ctx.boxW = frame.width
+        ctx.boxH = frame.height
+        return
+      }
+    }
+    const scene = this.rootRect
+    ctx.boxLeft = scene?.left ?? 0
+    ctx.boxTop = scene?.top ?? 0
+    ctx.boxW = scene?.width ?? 0
+    ctx.boxH = scene?.height ?? 0
+  }
+
   private fillAnchor(target: TargetRuntime, pointer: PointerState, ctx: ComputeContext): void {
     const rect = target.rect
     ctx.restX = rect ? rect.left + rect.width / 2 : pointer.x
@@ -1514,6 +1577,7 @@ class ScopeRuntime implements KinesisScope {
     ctx.chainY = target.chainY
     ctx.groupIndex = target.config.groupIndex
     ctx.groupCount = target.config.groupCount
+    this.fillEdgeBox(target, ctx)
     ctx.shape = SHAPE_CIRCLE
     ctx.anchorW = 0
     ctx.anchorH = 0
@@ -1598,6 +1662,8 @@ class ScopeRuntime implements KinesisScope {
     }
     this.audios.forEach((item) => item.destroy())
     this.audios = []
+    this.videos.forEach((item) => item.destroy())
+    this.videos = []
   }
 }
 

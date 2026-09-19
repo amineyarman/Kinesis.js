@@ -10,6 +10,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/kinesis.es.js",
       "require": "./dist/kinesis.umd.js"
+    },
+    "./text": {
+      "types": "./dist/text.d.ts",
+      "import": "./src/text.ts",
+      "default": "./src/text.ts"
     }
   },
   "files": [

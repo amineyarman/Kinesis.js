@@ -1,4 +1,5 @@
 import { expect, it } from "vitest"
+import { computeEdge } from "../edge"
 import { computeOutput, defaults, solveChain, type TargetConfig } from "../effects"
 
 const base = (overrides: Partial<TargetConfig> = {}): TargetConfig => ({
@@ -64,6 +65,15 @@ it("chain keeps neighbor spacing", () => {
   expect(outY[0]).toBe(100)
   expect(Math.hypot(outX[1]! - outX[0]!, outY[1]! - outY[0]!)).toBeCloseTo(20)
   expect(Math.hypot(outX[2]! - outX[1]!, outY[2]! - outY[1]!)).toBeCloseTo(20)
+})
+
+it("edge pushes inward from the nearest side", () => {
+  const sample = computeEdge(10, 80, 0, 0, 200, 160, 40)
+  expect(sample.left).toBe(10)
+  expect(sample.nearest).toBe(10)
+  expect(sample.nx).toBe(1)
+  expect(sample.ny).toBe(0)
+  expect(sample.progress).toBeCloseTo(0.75)
 })
 
 it("path follows the pointer", () => {

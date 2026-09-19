@@ -28,6 +28,10 @@ export type { FieldSample } from "./field"
 export { KSignal } from "./signal"
 export { KinesisAudio, audioBands, bandEnergy, hzToBin, peakEnergy, resolveBand } from "./audio"
 export type { AudioBandName, AudioSourceInput } from "./audio"
+export { computeEdge, createEdgeSample } from "./edge"
+export type { EdgeSample } from "./edge"
+export { KinesisVideo } from "./video"
+export type { VideoSourceInput } from "./video"
 export {
   cssProperties,
   cssPropertyMap,

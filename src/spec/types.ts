@@ -1,4 +1,4 @@
-export type PropertyStatus = "stable" | "experimental" | "deprecated" | "candidate"
+export type PropertyStatus = "stable" | "experimental" | "deprecated" | "candidate" | "plugin" | "abandoned"
 export type PropertyCategory =
   | "context"
   | "depth"
@@ -16,6 +16,8 @@ export type PropertyCategory =
   | "orbit"
   | "relationship"
   | "group"
+  | "edge"
+  | "text"
 export type PreviewKind =
   | "source"
   | "motion"

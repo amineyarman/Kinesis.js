@@ -12,6 +12,7 @@ import {
   type FieldSample,
   createFieldSample,
 } from "./field"
+import { computeEdge } from "./edge"
 import { getMotionPreset } from "./spec/motion-presets"
 import type { KSignal } from "./signal"
 
@@ -102,6 +103,9 @@ export interface TargetConfig {
   wake: number
   wakeForce: number
   wakeRadius: number
+  edge: number
+  edgeForce: number
+  edgeBox: string
 }
 
 export interface GroupConfig {
@@ -172,6 +176,10 @@ export interface ComputeContext {
   wakeNow: number
   wakeStart: number
   wakeLog: Array<{ t: number; x: number; y: number }> | null
+  boxLeft: number
+  boxTop: number
+  boxW: number
+  boxH: number
 }
 
 export const defaults: TargetConfig = {
@@ -261,6 +269,9 @@ export const defaults: TargetConfig = {
   wake: 0,
   wakeForce: 0,
   wakeRadius: 90,
+  edge: 0,
+  edgeForce: 0,
+  edgeBox: "scene",
 }
 
 function read(style: CSSStyleDeclaration, name: string): string {
@@ -467,6 +478,7 @@ export function parseTargetConfig(style: CSSStyleDeclaration): TargetConfig {
   const anchorName = read(style, "--k-anchor-name")
   const groupKind = read(style, "--k-group")
   const wake = timeToMs(read(style, "--k-wake"))
+  const edge = optionalPx(read(style, "--k-edge"))
   const grouped = Boolean((groupKind && groupKind !== "none") || optionalPx(read(style, "--k-chain")))
 
   return {
@@ -556,6 +568,9 @@ export function parseTargetConfig(style: CSSStyleDeclaration): TargetConfig {
     wake,
     wakeForce: optionalPx(read(style, "--k-wake-force")) || (wake ? 28 : 0),
     wakeRadius: lengthToPx(read(style, "--k-wake-radius") || "90px"),
+    edge,
+    edgeForce: optionalPx(read(style, "--k-edge-force")) || (edge ? 24 : 0),
+    edgeBox: read(style, "--k-edge-box") || "scene",
   }
 }
 
@@ -588,7 +603,8 @@ export function isMotionTarget(config: TargetConfig): boolean {
     config.lensOn ||
     config.bend !== 0 ||
     config.chain !== 0 ||
-    config.wake !== 0
+    config.wake !== 0 ||
+    config.edge !== 0
   )
 }
 
@@ -686,6 +702,10 @@ export function createComputeContext(): ComputeContext {
     wakeNow: 0,
     wakeStart: 0,
     wakeLog: null,
+    boxLeft: 0,
+    boxTop: 0,
+    boxW: 0,
+    boxH: 0,
   }
 }
 
@@ -766,6 +786,11 @@ export function computeOutput(
   if (ctx?.hasChain) {
     output.x += (ctx.chainX - restX) * intensity
     output.y += (ctx.chainY - restY) * intensity
+  }
+  if (config.edge > 0 && config.edgeForce !== 0 && ctx && ctx.boxW > 0 && ctx.boxH > 0) {
+    const sample = computeEdge(restX, restY, ctx.boxLeft, ctx.boxTop, ctx.boxW, ctx.boxH, config.edge)
+    output.x += sample.nx * config.edgeForce * sample.progress * intensity
+    output.y += sample.ny * config.edgeForce * sample.progress * intensity
   }
   const pointerAnchor = !config.anchor || config.anchor === "pointer"
   const live = !pointerAnchor || ctx?.pointerLive !== false
@@ -1105,7 +1130,7 @@ export class TargetRuntime {
     const audio = config.audioBin >= 0 || (config.audioBand !== "none" && config.audioBand !== "")
     const pull = config.magneticRadius > 0 || config.attract !== 0 || config.repel !== 0
     const field = pull || config.vortex !== 0 || config.wind !== 0 || config.ripple !== 0 || config.lensOn || config.bend !== 0
-    const shift = pull || follow || config.trail || config.scrollX || config.orbit || config.vortex || config.wind || config.tether || config.wave || config.ripple || config.bend || config.chain || config.wake
+    const shift = pull || follow || config.trail || config.scrollX || config.orbit || config.vortex || config.wind || config.tether || config.wave || config.ripple || config.bend || config.chain || config.wake || config.edge
     this.bound = CHANNELS.some((key) => !!this.bindings[key])
     this.drive.x = !!(config.parallaxX || shift || this.bindings.x)
     this.drive.y = !!(config.parallaxY || shift || this.bindings.y)
@@ -1142,6 +1167,7 @@ export class TargetRuntime {
       !config.wave &&
       !config.chain &&
       !config.wake &&
+      !config.edge &&
       !this.usesAnchor
     this.proximityRadius = Math.max(
       config.repel ? config.repelRadius : 0,
