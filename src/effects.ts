@@ -98,6 +98,10 @@ export interface TargetConfig {
   lensOn: boolean
   bend: number
   bendRadius: number
+  chain: number
+  wake: number
+  wakeForce: number
+  wakeRadius: number
 }
 
 export interface GroupConfig {
@@ -119,6 +123,7 @@ export interface GroupConfig {
   orbitDirection: number
   orbitMode: string
   orbitPhase: number
+  chain: number
 }
 
 export interface MotionOutput {
@@ -161,6 +166,12 @@ export interface ComputeContext {
   anchorH: number
   pointerLive: boolean
   sample: FieldSample
+  hasChain: boolean
+  chainX: number
+  chainY: number
+  wakeNow: number
+  wakeStart: number
+  wakeLog: Array<{ t: number; x: number; y: number }> | null
 }
 
 export const defaults: TargetConfig = {
@@ -246,6 +257,10 @@ export const defaults: TargetConfig = {
   lensOn: false,
   bend: 0,
   bendRadius: 160,
+  chain: 0,
+  wake: 0,
+  wakeForce: 0,
+  wakeRadius: 90,
 }
 
 function read(style: CSSStyleDeclaration, name: string): string {
@@ -287,17 +302,74 @@ function winding(value: string): number {
 }
 
 function defaultOrder(kind: string): string {
-  if (kind === "wave") return "sequence"
+  if (kind === "wave" || kind === "chain") return "sequence"
   if (kind === "orbit") return "radial"
   return "spatial"
+}
+
+function timeToMs(value: string): number {
+  if (!value || value === "none") return 0
+  if (value.endsWith("ms")) return Number.parseFloat(value) || 0
+  if (value.endsWith("s")) return (Number.parseFloat(value) || 0) * 1000
+  return Number.parseFloat(value) || 0
+}
+
+export const CHAIN_MAX = 64
+export const CHAIN_HQ = 32
+export const WAKE_MAX_SAMPLES = 12
+
+export function solveChain(
+  restX: number[],
+  restY: number[],
+  prevX: number[],
+  prevY: number[],
+  anchorX: number,
+  anchorY: number,
+  sep: number,
+  passes: number,
+  outX: number[],
+  outY: number[],
+): void {
+  const count = restX.length
+  if (!count) return
+  for (let index = 0; index < count; index += 1) {
+    outX[index] = Number.isFinite(prevX[index]) ? prevX[index]! : restX[index]!
+    outY[index] = Number.isFinite(prevY[index]) ? prevY[index]! : restY[index]!
+  }
+  outX[0] = anchorX
+  outY[0] = anchorY
+  const reach = (from: number, to: number) => {
+    const dx = outX[to]! - outX[from]!
+    const dy = outY[to]! - outY[from]!
+    const d = Math.hypot(dx, dy)
+    if (d < 1e-6) {
+      outX[to] = outX[from]! + sep
+      outY[to] = outY[from]!
+      return
+    }
+    outX[to] = outX[from]! + (dx / d) * sep
+    outY[to] = outY[from]! + (dy / d) * sep
+  }
+  const forward = () => {
+    for (let index = 1; index < count; index += 1) reach(index - 1, index)
+  }
+  forward()
+  if (passes > 1 && count > 1) {
+    for (let index = count - 2; index > 0; index -= 1) reach(index + 1, index)
+    outX[0] = anchorX
+    outY[0] = anchorY
+    forward()
+  }
 }
 
 export function parseGroupConfig(style: CSSStyleDeclaration): GroupConfig {
   const kind = read(style, "--k-group")
   const order = read(style, "--k-group-order")
+  const chain = optionalPx(read(style, "--k-chain"))
+  const resolved = kind && kind !== "none" ? kind : chain ? "chain" : ""
   return {
-    kind: kind && kind !== "none" ? kind : "",
-    order: order && order !== "none" && order !== "auto" ? order : defaultOrder(kind),
+    kind: resolved,
+    order: order && order !== "none" && order !== "auto" ? order : defaultOrder(resolved),
     wave: optionalPx(read(style, "--k-wave")),
     waveAxis: read(style, "--k-wave-axis") || "y",
     waveSpread: Number.parseFloat(read(style, "--k-wave-spread") || "0.18") || 0.18,
@@ -314,6 +386,7 @@ export function parseGroupConfig(style: CSSStyleDeclaration): GroupConfig {
     orbitDirection: winding(read(style, "--k-orbit-direction") || "clockwise"),
     orbitMode: read(style, "--k-orbit-mode") || "time",
     orbitPhase: angleToDeg(read(style, "--k-orbit-phase") || "0deg"),
+    chain: resolved === "chain" ? chain || 20 : chain,
   }
 }
 
@@ -355,6 +428,8 @@ export function applyGroupConfig(config: TargetConfig, group: GroupConfig, index
       config.orbitMode = group.orbitMode
     }
     if (!config.orbitPhase && count) config.orbitPhase = (360 / count) * index
+  } else if (group.kind === "chain") {
+    if (!config.chain) config.chain = group.chain || 20
   }
 }
 
@@ -391,7 +466,8 @@ export function parseTargetConfig(style: CSSStyleDeclaration): TargetConfig {
   const lensRadiusRaw = read(style, "--k-lens-radius")
   const anchorName = read(style, "--k-anchor-name")
   const groupKind = read(style, "--k-group")
-  const grouped = Boolean(groupKind && groupKind !== "none")
+  const wake = timeToMs(read(style, "--k-wake"))
+  const grouped = Boolean((groupKind && groupKind !== "none") || optionalPx(read(style, "--k-chain")))
 
   return {
     enabled: read(style, "--k-enabled") !== "0",
@@ -476,6 +552,10 @@ export function parseTargetConfig(style: CSSStyleDeclaration): TargetConfig {
     lensOn: !grouped && Boolean(lensScaleRaw && lensScaleRaw !== "none"),
     bend: grouped ? 0 : optionalDeg(read(style, "--k-bend")),
     bendRadius: lengthToPx(read(style, "--k-bend-radius") || "160px"),
+    chain: grouped ? 0 : optionalPx(read(style, "--k-chain")),
+    wake,
+    wakeForce: optionalPx(read(style, "--k-wake-force")) || (wake ? 28 : 0),
+    wakeRadius: lengthToPx(read(style, "--k-wake-radius") || "90px"),
   }
 }
 
@@ -506,7 +586,9 @@ export function isMotionTarget(config: TargetConfig): boolean {
     config.wave !== 0 ||
     config.ripple !== 0 ||
     config.lensOn ||
-    config.bend !== 0
+    config.bend !== 0 ||
+    config.chain !== 0 ||
+    config.wake !== 0
   )
 }
 
@@ -598,6 +680,12 @@ export function createComputeContext(): ComputeContext {
     anchorH: 0,
     pointerLive: true,
     sample: createFieldSample(),
+    hasChain: false,
+    chainX: 0,
+    chainY: 0,
+    wakeNow: 0,
+    wakeStart: 0,
+    wakeLog: null,
   }
 }
 
@@ -675,6 +763,10 @@ export function computeOutput(
 
   const restX = ctx?.restX ?? rect.left + rect.width / 2
   const restY = ctx?.restY ?? rect.top + rect.height / 2
+  if (ctx?.hasChain) {
+    output.x += (ctx.chainX - restX) * intensity
+    output.y += (ctx.chainY - restY) * intensity
+  }
   const pointerAnchor = !config.anchor || config.anchor === "pointer"
   const live = !pointerAnchor || ctx?.pointerLive !== false
   const following = config.follow !== "none" && config.follow !== ""
@@ -865,6 +957,41 @@ export function computeOutput(
     if (config.waveAxis !== "x") output.y += influence * config.wave * intensity
   }
 
+  if (config.wake > 0 && config.wakeForce !== 0 && ctx?.wakeLog) {
+    const log = ctx.wakeLog
+    const oldest = ctx.wakeNow - config.wake
+    let taken = 0
+    for (let index = log.length - 1; index >= ctx.wakeStart && taken < WAKE_MAX_SAMPLES; index -= 1) {
+      const sample = log[index]
+      if (!sample || sample.t < oldest) break
+      const newer = log[index + 1]
+      const age = (ctx.wakeNow - sample.t) / config.wake
+      const decay = 1 - age
+      const dx = restX - sample.x
+      const dy = restY - sample.y
+      const d2 = dx * dx + dy * dy
+      const radius2 = config.wakeRadius * config.wakeRadius
+      if (d2 < radius2) {
+        const d = Math.sqrt(d2) || 1
+        const t = 1 - d / config.wakeRadius
+        const i = fieldInfluence(t)
+        let dirx = newer ? newer.x - sample.x : 0
+        let diry = newer ? newer.y - sample.y : 0
+        const mag = Math.hypot(dirx, diry)
+        if (mag > 1e-6) {
+          dirx /= mag
+          diry /= mag
+        } else {
+          dirx = dx / d
+          diry = dy / d
+        }
+        output.x += (dirx * 0.7 + (dx / d) * 0.3) * config.wakeForce * i * decay * intensity
+        output.y += (diry * 0.7 + (dy / d) * 0.3) * config.wakeForce * i * decay * intensity
+      }
+      taken += 1
+    }
+  }
+
   output.x += config.scrollX * scrollProgress * intensity
   output.y += config.scrollY * scrollProgress * intensity
 
@@ -914,6 +1041,8 @@ export class TargetRuntime {
   hitGen = 0
   orbitAngle = Number.NaN
   orbitVel = 0
+  chainX = Number.NaN
+  chainY = Number.NaN
   readonly scratch: MotionOutput = restOutput()
   private springs: Record<keyof MotionOutput, Spring>
   private drive: Record<keyof MotionOutput, boolean> = {
@@ -976,7 +1105,7 @@ export class TargetRuntime {
     const audio = config.audioBin >= 0 || (config.audioBand !== "none" && config.audioBand !== "")
     const pull = config.magneticRadius > 0 || config.attract !== 0 || config.repel !== 0
     const field = pull || config.vortex !== 0 || config.wind !== 0 || config.ripple !== 0 || config.lensOn || config.bend !== 0
-    const shift = pull || follow || config.trail || config.scrollX || config.orbit || config.vortex || config.wind || config.tether || config.wave || config.ripple || config.bend
+    const shift = pull || follow || config.trail || config.scrollX || config.orbit || config.vortex || config.wind || config.tether || config.wave || config.ripple || config.bend || config.chain || config.wake
     this.bound = CHANNELS.some((key) => !!this.bindings[key])
     this.drive.x = !!(config.parallaxX || shift || this.bindings.x)
     this.drive.y = !!(config.parallaxY || shift || this.bindings.y)
@@ -1011,6 +1140,8 @@ export class TargetRuntime {
       !config.tether &&
       !config.face &&
       !config.wave &&
+      !config.chain &&
+      !config.wake &&
       !this.usesAnchor
     this.proximityRadius = Math.max(
       config.repel ? config.repelRadius : 0,

@@ -1,5 +1,5 @@
 import { expect, it } from "vitest"
-import { computeOutput, defaults, type TargetConfig } from "../effects"
+import { computeOutput, defaults, solveChain, type TargetConfig } from "../effects"
 
 const base = (overrides: Partial<TargetConfig> = {}): TargetConfig => ({
   ...defaults,
@@ -43,6 +43,27 @@ it("path follows scroll progress", () => {
     "scroll",
   )
   expect(output.path).toBe(50)
+})
+
+it("chain keeps neighbor spacing", () => {
+  const outX = [0, 0, 0]
+  const outY = [0, 0, 0]
+  solveChain(
+    [100, 140, 180],
+    [100, 100, 100],
+    [Number.NaN, Number.NaN, Number.NaN],
+    [Number.NaN, Number.NaN, Number.NaN],
+    40,
+    100,
+    20,
+    1,
+    outX,
+    outY,
+  )
+  expect(outX[0]).toBe(40)
+  expect(outY[0]).toBe(100)
+  expect(Math.hypot(outX[1]! - outX[0]!, outY[1]! - outY[0]!)).toBeCloseTo(20)
+  expect(Math.hypot(outX[2]! - outX[1]!, outY[2]! - outY[1]!)).toBeCloseTo(20)
 })
 
 it("path follows the pointer", () => {

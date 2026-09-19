@@ -1,5 +1,7 @@
 import {
   applyGroupConfig,
+  CHAIN_HQ,
+  CHAIN_MAX,
   computeOutput,
   createComputeContext,
   isMotionTarget,
@@ -8,6 +10,7 @@ import {
   parseTargetConfig,
   restOutput,
   shouldReduceMotion,
+  solveChain,
   TargetRuntime,
   type ComputeContext,
   type GroupConfig,
@@ -34,6 +37,7 @@ export interface MotionHandle {
   magnetic(value: { radius?: number; force?: number }): this
   audio(value: { source: KinesisAudio; band?: string; scale?: number[]; motion?: string }): this
   orbit(value: { radius?: number; speed?: number; direction?: string; mode?: string; phase?: number }): this
+  wake(value: { duration?: number; force?: number; radius?: number }): this
   path(value: { d?: string; strength?: number; orient?: string }): this
   tether(value: { to?: string; length?: number; slack?: number; axis?: string }): this
   face(value: { to?: string; max?: number; axis?: string; invert?: boolean }): this
@@ -51,6 +55,7 @@ export interface GroupHandle {
   lens(value?: { scale?: number; radius?: number }): this
   bend(value?: { amount?: number; radius?: number }): this
   orbit(value?: { radius?: number; speed?: number }): this
+  chain(value?: { length?: number }): this
 }
 
 export type FieldForce = "attract" | "repel" | "orbit" | "vortex" | "directional"
@@ -163,6 +168,10 @@ const PROPERTY_MAP: Record<string, string> = {
   audioScale: "--k-audio-scale",
   scrollRotate: "--k-scroll-rotate",
   path: "--k-path",
+  chain: "--k-chain",
+  wake: "--k-wake",
+  wakeForce: "--k-wake-force",
+  wakeRadius: "--k-wake-radius",
   pathStrength: "--k-path-strength",
   pathOrient: "--k-path-orient",
   springStiffness: "--k-spring-stiffness",
@@ -198,11 +207,13 @@ function formatCssValue(name: string, value: string | number | number[]): string
     return value.map((item) => `${item}px`).join(" ")
   }
   if (typeof value === "number") {
+    if (name === "--k-wake") return `${value}ms`
     if (/tilt|rotate|face|bend|phase/.test(name)) return `${value}deg`
     if (
-      /force|intensity|depth|audio|spring|smoothing|vortex|spin|pull|speed|spread|scale|threshold|limit|invert|trail|strength/.test(name) ||
-      name === "--k-motion" ||
-      name === "--k-source"
+      name !== "--k-wake-force" &&
+      (/force|intensity|depth|audio|spring|smoothing|vortex|spin|pull|speed|spread|scale|threshold|limit|invert|trail|strength/.test(name) ||
+        name === "--k-motion" ||
+        name === "--k-source")
     ) {
       return String(value)
     }
@@ -283,6 +294,13 @@ function createHandle(element: HTMLElement, runtime: ScopeRuntime): MotionHandle
         path: value.d ?? "",
         ...(value.strength != null ? { pathStrength: value.strength } : {}),
         ...(value.orient ? { pathOrient: value.orient } : {}),
+      })
+    },
+    wake(value) {
+      return this.set({
+        wake: value.duration ?? 180,
+        wakeForce: value.force ?? 28,
+        wakeRadius: value.radius ?? 90,
       })
     },
     tether(value) {
@@ -478,6 +496,15 @@ class ScopeRuntime implements KinesisScope {
   private lastPointer = { x: 0, y: 0, time: 0 }
   private pointerLog: Array<{ t: number; x: number; y: number }> = []
   private logStart = 0
+  private chains: TargetRuntime[][] = []
+  private chainRestX: number[] = []
+  private chainRestY: number[] = []
+  private chainPrevX: number[] = []
+  private chainPrevY: number[] = []
+  private chainOutX: number[] = []
+  private chainOutY: number[] = []
+  private wakeDriven = false
+  private maxWake = 0
   private pointerInside = false
   private windowPointer = false
   private rootRect: { left: number; top: number; width: number; height: number } | undefined
@@ -752,6 +779,8 @@ class ScopeRuntime implements KinesisScope {
     let depth = false
     let tilt = false
     let time = false
+    let wake = false
+    let maxWake = 0
     let fields = 0
     let radius = 0
     this.list.length = 0
@@ -766,6 +795,10 @@ class ScopeRuntime implements KinesisScope {
         (config.path && config.source === "scroll")
       ) {
         scroll = true
+      }
+      if (config.wake > 0) {
+        wake = true
+        if (config.wake > maxWake) maxWake = config.wake
       }
       if (config.source === "orientation") orient = true
       if (config.depth) depth = true
@@ -790,6 +823,8 @@ class ScopeRuntime implements KinesisScope {
     this.depthScene = depth
     this.threeD = !!this.sceneEl || depth || tilt
     this.timeDriven = time
+    this.wakeDriven = wake
+    this.maxWake = maxWake
     this.fieldCount = fields
     this.maxFieldRadius = radius
     this.hashDirty = true
@@ -978,8 +1013,12 @@ class ScopeRuntime implements KinesisScope {
       if (existing) existing.refresh(config)
       else this.targets.set(node, new TargetRuntime(node, config))
     })
+    this.chains = []
     groups.forEach((entry) => {
-      const kids = Array.from(entry.node.children).filter((node): node is HTMLElement => node instanceof HTMLElement && this.owns(node))
+      const raw = Array.from(entry.node.children).filter((node): node is HTMLElement => node instanceof HTMLElement && this.owns(node))
+      const kids = entry.group.kind === "chain" ? raw.slice(0, CHAIN_MAX) : raw
+      const chainMembers = entry.group.kind === "chain" ? [] as TargetRuntime[] : null
+      if (chainMembers) this.chains.push(chainMembers)
       kids.forEach((kid, index) => {
         let target = this.targets.get(kid)
         if (!target) {
@@ -993,6 +1032,7 @@ class ScopeRuntime implements KinesisScope {
           target.refresh(target.config)
         }
         seen.add(kid)
+        if (chainMembers && target) chainMembers.push(target)
       })
     })
     Array.from(this.targets.keys()).forEach((node) => {
@@ -1052,6 +1092,10 @@ class ScopeRuntime implements KinesisScope {
       ctx.sceneY = this.rootRect.top + this.rootRect.height / 2
     }
     ctx.pointerLive = this.pointerInside || this.windowPointer
+    ctx.wakeNow = performance.now()
+    ctx.wakeLog = this.wakeDriven ? this.pointerLog : null
+    ctx.wakeStart = this.logStart
+    if (this.chains.length) this.solveChains(ctx)
     const useHash = this.fieldCount > 0 && this.list.length >= 150
     if (useHash && this.hashDirty) this.rebuildHash()
     if (useHash) {
@@ -1117,6 +1161,7 @@ class ScopeRuntime implements KinesisScope {
       if (target.simulate(output, dt, reduce, snap)) active = true
     }
     if (this.timeDriven) active = true
+    if (this.wakeDriven && this.lastPointer.time && ctx.wakeNow - this.lastPointer.time < this.maxWake) active = true
     if (this.scrollDriven) {
       if (Math.abs(rootProgress - this.lastViewProgress) > 0.0008) active = true
       this.lastViewProgress = rootProgress
@@ -1337,6 +1382,10 @@ class ScopeRuntime implements KinesisScope {
           "--k-orbit": value.radius ?? 80,
           "--k-orbit-speed": value.speed ?? 0.25,
         }),
+      chain: (value = {}) =>
+        apply("chain", {
+          "--k-chain": value.length ?? 20,
+        }),
     }
     return handle
   }
@@ -1395,10 +1444,74 @@ class ScopeRuntime implements KinesisScope {
     this.hashDirty = false
   }
 
+  private solveChains(ctx: ComputeContext): void {
+    const live = ctx.pointerLive
+    const pointer = this.pointerScratch
+    pointer.x = this.pointerState.x
+    pointer.y = this.pointerState.y
+    pointer.nx = this.pointerState.nx
+    pointer.ny = this.pointerState.ny
+    for (let group = 0; group < this.chains.length; group += 1) {
+      const members = this.chains[group]
+      if (!members?.length) continue
+      const count = members.length
+      if (!live) {
+        for (let index = 0; index < count; index += 1) {
+          const member = members[index]!
+          member.chainX = Number.NaN
+          member.chainY = Number.NaN
+        }
+        continue
+      }
+      const head = members[0]!
+      if (!head.rect) this.measure(head)
+      this.fillAnchor(head, pointer, ctx)
+      const rest0x = head.rect ? head.rect.left + head.rect.width / 2 : ctx.anchorX
+      const rest0y = head.rect ? head.rect.top + head.rect.height / 2 : ctx.anchorY
+      const ax = live ? ctx.anchorX : rest0x
+      const ay = live ? ctx.anchorY : rest0y
+      this.chainRestX.length = count
+      this.chainRestY.length = count
+      this.chainPrevX.length = count
+      this.chainPrevY.length = count
+      this.chainOutX.length = count
+      this.chainOutY.length = count
+      for (let index = 0; index < count; index += 1) {
+        const member = members[index]!
+        if (!member.rect) this.measure(member)
+        const box = member.rect
+        this.chainRestX[index] = box ? box.left + box.width / 2 : ax
+        this.chainRestY[index] = box ? box.top + box.height / 2 : ay
+        this.chainPrevX[index] = member.chainX
+        this.chainPrevY[index] = member.chainY
+      }
+      solveChain(
+        this.chainRestX,
+        this.chainRestY,
+        this.chainPrevX,
+        this.chainPrevY,
+        ax,
+        ay,
+        head.config.chain || 20,
+        count <= CHAIN_HQ ? 2 : 1,
+        this.chainOutX,
+        this.chainOutY,
+      )
+      for (let index = 0; index < count; index += 1) {
+        const member = members[index]!
+        member.chainX = this.chainOutX[index]!
+        member.chainY = this.chainOutY[index]!
+      }
+    }
+  }
+
   private fillAnchor(target: TargetRuntime, pointer: PointerState, ctx: ComputeContext): void {
     const rect = target.rect
     ctx.restX = rect ? rect.left + rect.width / 2 : pointer.x
     ctx.restY = rect ? rect.top + rect.height / 2 : pointer.y
+    ctx.hasChain = target.config.chain !== 0 && Number.isFinite(target.chainX)
+    ctx.chainX = target.chainX
+    ctx.chainY = target.chainY
     ctx.groupIndex = target.config.groupIndex
     ctx.groupCount = target.config.groupCount
     ctx.shape = SHAPE_CIRCLE
