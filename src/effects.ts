@@ -1,4 +1,17 @@
 import { angleToDeg, clamp, lengthToPx, lerp, splitValues, Spring } from "./core"
+import {
+  evaluateField,
+  falloffId,
+  magneticFalloffId,
+  MODE_ATTRACT,
+  MODE_DIRECTIONAL,
+  MODE_REPEL,
+  MODE_VORTEX,
+  orbitAngle,
+  SHAPE_CIRCLE,
+  type FieldSample,
+  createFieldSample,
+} from "./field"
 import { getMotionPreset } from "./spec/motion-presets"
 import type { KSignal } from "./signal"
 
@@ -21,7 +34,7 @@ export interface TargetConfig {
   depthStep: number
   magneticRadius: number
   magneticForce: number
-  magneticFalloff: string
+  magneticFalloff: number
   magneticAxis: string
   repel: number
   repelRadius: number
@@ -44,6 +57,67 @@ export interface TargetConfig {
   springDamping: number
   springMass: number
   smoothing: number
+  anchor: string
+  anchorName: string
+  face: number
+  faceAxis: string
+  faceInvert: boolean
+  orbit: number
+  orbitSpeed: number
+  orbitDirection: number
+  orbitMode: string
+  orbitPhase: number
+  vortex: number
+  vortexRadius: number
+  vortexSpin: number
+  vortexPull: number
+  vortexFalloff: number
+  wind: number
+  windRadius: number
+  windFalloff: number
+  windThreshold: number
+  windLimit: number
+  tether: number
+  tetherSlack: number
+  tetherAxis: string
+  tetherLimit: number
+  group: string
+  groupOrder: string
+  groupIndex: number
+  groupCount: number
+  wave: number
+  waveAxis: string
+  waveSpread: number
+  waveRadius: number
+  ripple: number
+  rippleRadius: number
+  rippleFalloff: number
+  lensScale: number
+  lensRadius: number
+  lensOn: boolean
+  bend: number
+  bendRadius: number
+}
+
+export interface GroupConfig {
+  kind: string
+  order: string
+  wave: number
+  waveAxis: string
+  waveSpread: number
+  waveRadius: number
+  ripple: number
+  rippleRadius: number
+  rippleFalloff: number
+  lensScale: number
+  lensRadius: number
+  bend: number
+  bendRadius: number
+  orbit: number
+  orbitSpeed: number
+  orbitDirection: number
+  orbitMode: string
+  orbitPhase: number
 }
 
 export interface MotionOutput {
@@ -58,7 +132,37 @@ export interface MotionOutput {
   path: number
 }
 
-const defaults: TargetConfig = {
+export interface ComputeContext {
+  clock: number
+  dt: number
+  velX: number
+  velY: number
+  speed: number
+  sceneX: number
+  sceneY: number
+  parentX: number
+  parentY: number
+  anchorX: number
+  anchorY: number
+  restX: number
+  restY: number
+  groupIndex: number
+  groupCount: number
+  orbitAngle: number
+  orbitVel: number
+  windNx: number
+  windNy: number
+  windGain: number
+  shape: number
+  anchorLeft: number
+  anchorTop: number
+  anchorW: number
+  anchorH: number
+  pointerLive: boolean
+  sample: FieldSample
+}
+
+export const defaults: TargetConfig = {
   enabled: true,
   source: "auto",
   space: "local",
@@ -77,7 +181,7 @@ const defaults: TargetConfig = {
   depthStep: 12,
   magneticRadius: 0,
   magneticForce: 1,
-  magneticFalloff: "smooth",
+  magneticFalloff: magneticFalloffId("smooth"),
   magneticAxis: "both",
   repel: 0,
   repelRadius: 180,
@@ -100,6 +204,46 @@ const defaults: TargetConfig = {
   springDamping: 22,
   springMass: 1,
   smoothing: 0,
+  anchor: "pointer",
+  anchorName: "",
+  face: 0,
+  faceAxis: "both",
+  faceInvert: false,
+  orbit: 0,
+  orbitSpeed: 0.25,
+  orbitDirection: 1,
+  orbitMode: "time",
+  orbitPhase: 0,
+  vortex: 0,
+  vortexRadius: 200,
+  vortexSpin: 1,
+  vortexPull: 0.35,
+  vortexFalloff: falloffId("smooth"),
+  wind: 0,
+  windRadius: 200,
+  windFalloff: falloffId("smooth"),
+  windThreshold: 0.02,
+  windLimit: 1,
+  tether: 0,
+  tetherSlack: 0,
+  tetherAxis: "both",
+  tetherLimit: 0,
+  group: "",
+  groupOrder: "",
+  groupIndex: 0,
+  groupCount: 0,
+  wave: 0,
+  waveAxis: "y",
+  waveSpread: 0.18,
+  waveRadius: 160,
+  ripple: 0,
+  rippleRadius: 180,
+  rippleFalloff: falloffId("smooth"),
+  lensScale: 1.25,
+  lensRadius: 120,
+  lensOn: false,
+  bend: 0,
+  bendRadius: 160,
 }
 
 function read(style: CSSStyleDeclaration, name: string): string {
@@ -117,15 +261,99 @@ function parsePair(
   return [first, parser(parts[1] ?? parts[0] ?? "0")]
 }
 
-function falloff(t: number, kind: string): number {
-  const clamped = clamp(t, 0, 1)
-  if (kind === "linear") return clamped
-  if (kind === "sharp") return clamped * clamped
-  return 1 - (1 - clamped) * (1 - clamped)
-}
-
 function authored(value: string, blanks: string[]): boolean {
   return Boolean(value) && !blanks.includes(value)
+}
+
+function optionalPx(value: string): number {
+  if (!value || value === "none") return 0
+  return lengthToPx(value)
+}
+
+function optionalNum(value: string): number {
+  if (!value || value === "none") return 0
+  return Number.parseFloat(value) || 0
+}
+
+function optionalDeg(value: string): number {
+  if (!value || value === "none") return 0
+  return angleToDeg(value)
+}
+
+function winding(value: string): number {
+  return value === "counter-clockwise" || value === "counterclockwise" || value === "ccw" ? -1 : 1
+}
+
+function defaultOrder(kind: string): string {
+  if (kind === "wave") return "sequence"
+  if (kind === "orbit") return "radial"
+  return "spatial"
+}
+
+export function parseGroupConfig(style: CSSStyleDeclaration): GroupConfig {
+  const kind = read(style, "--k-group")
+  const order = read(style, "--k-group-order")
+  return {
+    kind: kind && kind !== "none" ? kind : "",
+    order: order && order !== "none" && order !== "auto" ? order : defaultOrder(kind),
+    wave: optionalPx(read(style, "--k-wave")),
+    waveAxis: read(style, "--k-wave-axis") || "y",
+    waveSpread: Number.parseFloat(read(style, "--k-wave-spread") || "0.18") || 0.18,
+    waveRadius: lengthToPx(read(style, "--k-wave-radius") || "160px"),
+    ripple: optionalPx(read(style, "--k-ripple")),
+    rippleRadius: lengthToPx(read(style, "--k-ripple-radius") || "180px"),
+    rippleFalloff: falloffId(read(style, "--k-ripple-falloff") || "smooth"),
+    lensScale: Number.parseFloat(read(style, "--k-lens-scale") || "1.25") || 1.25,
+    lensRadius: lengthToPx(read(style, "--k-lens-radius") || "120px"),
+    bend: optionalDeg(read(style, "--k-bend")),
+    bendRadius: lengthToPx(read(style, "--k-bend-radius") || "160px"),
+    orbit: optionalPx(read(style, "--k-orbit")),
+    orbitSpeed: Number.parseFloat(read(style, "--k-orbit-speed") || "0.25") || 0.25,
+    orbitDirection: winding(read(style, "--k-orbit-direction") || "clockwise"),
+    orbitMode: read(style, "--k-orbit-mode") || "time",
+    orbitPhase: angleToDeg(read(style, "--k-orbit-phase") || "0deg"),
+  }
+}
+
+export function applyGroupConfig(config: TargetConfig, group: GroupConfig, index: number, count: number): void {
+  if (!group.kind) return
+  config.group = group.kind
+  config.groupOrder = group.order || defaultOrder(group.kind)
+  config.groupIndex = index
+  config.groupCount = count
+  if (group.kind === "wave") {
+    if (!config.wave) {
+      config.wave = group.wave
+      config.waveAxis = group.waveAxis
+      config.waveSpread = group.waveSpread
+      config.waveRadius = group.waveRadius
+    }
+  } else if (group.kind === "ripple") {
+    if (!config.ripple) {
+      config.ripple = group.ripple
+      config.rippleRadius = group.rippleRadius
+      config.rippleFalloff = group.rippleFalloff
+    }
+  } else if (group.kind === "lens") {
+    if (!config.lensOn) {
+      config.lensScale = group.lensScale
+      config.lensRadius = group.lensRadius
+      config.lensOn = true
+    }
+  } else if (group.kind === "bend") {
+    if (!config.bend) {
+      config.bend = group.bend
+      config.bendRadius = group.bendRadius
+    }
+  } else if (group.kind === "orbit") {
+    if (!config.orbit) {
+      config.orbit = group.orbit
+      config.orbitSpeed = group.orbitSpeed
+      config.orbitDirection = group.orbitDirection
+      config.orbitMode = group.orbitMode
+    }
+    if (!config.orbitPhase && count) config.orbitPhase = (360 / count) * index
+  }
 }
 
 export function parseTargetConfig(style: CSSStyleDeclaration): TargetConfig {
@@ -157,6 +385,9 @@ export function parseTargetConfig(style: CSSStyleDeclaration): TargetConfig {
   const pathRaw = read(style, "--k-path")
   const audioBinRaw = read(style, "--k-audio-bin")
   const [audioScaleMin, audioScaleMax] = parsePair(read(style, "--k-audio-scale") || "1 1.2", Number.parseFloat)
+  const lensScaleRaw = read(style, "--k-lens-scale")
+  const lensRadiusRaw = read(style, "--k-lens-radius")
+  const anchorName = read(style, "--k-anchor-name")
 
   return {
     enabled: read(style, "--k-enabled") !== "0",
@@ -177,7 +408,7 @@ export function parseTargetConfig(style: CSSStyleDeclaration): TargetConfig {
     depthStep: lengthToPx(read(style, "--k-depth-step") || "12px"),
     magneticRadius: magneticRadiusRaw && magneticRadiusRaw !== "0px" ? lengthToPx(magneticRadiusRaw) : 0,
     magneticForce: Number.parseFloat(read(style, "--k-magnetic-force") || "1") || 0,
-    magneticFalloff: read(style, "--k-magnetic-falloff") || "smooth",
+    magneticFalloff: magneticFalloffId(read(style, "--k-magnetic-falloff") || "smooth"),
     magneticAxis: read(style, "--k-magnetic-axis") || "both",
     repel: lengthToPx(read(style, "--k-repel") || "0"),
     repelRadius: lengthToPx(read(style, "--k-repel-radius") || "180px"),
@@ -200,6 +431,46 @@ export function parseTargetConfig(style: CSSStyleDeclaration): TargetConfig {
     springDamping: Number.parseFloat(read(style, "--k-spring-damping") || "22") || 22,
     springMass: Number.parseFloat(read(style, "--k-spring-mass") || "1") || 1,
     smoothing: Number.parseFloat(read(style, "--k-smoothing") || "0") || 0,
+    anchor: read(style, "--k-anchor") || "pointer",
+    anchorName: anchorName && anchorName !== "none" ? anchorName : "",
+    face: optionalDeg(read(style, "--k-face")),
+    faceAxis: read(style, "--k-face-axis") || "both",
+    faceInvert: read(style, "--k-face-invert") === "1",
+    orbit: optionalPx(read(style, "--k-orbit")),
+    orbitSpeed: Number.parseFloat(read(style, "--k-orbit-speed") || "0.25") || 0.25,
+    orbitDirection: winding(read(style, "--k-orbit-direction") || "clockwise"),
+    orbitMode: read(style, "--k-orbit-mode") || "time",
+    orbitPhase: angleToDeg(read(style, "--k-orbit-phase") || "0deg"),
+    vortex: optionalNum(read(style, "--k-vortex")),
+    vortexRadius: lengthToPx(read(style, "--k-vortex-radius") || "200px"),
+    vortexSpin: Number.parseFloat(read(style, "--k-vortex-spin") || "1") || 0,
+    vortexPull: Number.parseFloat(read(style, "--k-vortex-pull") || "0.35") || 0,
+    vortexFalloff: falloffId(read(style, "--k-vortex-falloff") || "smooth"),
+    wind: optionalPx(read(style, "--k-wind")),
+    windRadius: lengthToPx(read(style, "--k-wind-radius") || "200px"),
+    windFalloff: falloffId(read(style, "--k-wind-falloff") || "smooth"),
+    windThreshold: Number.parseFloat(read(style, "--k-wind-threshold") || "0.02") || 0,
+    windLimit: Number.parseFloat(read(style, "--k-wind-limit") || "1") || 1,
+    tether: optionalPx(read(style, "--k-tether")),
+    tetherSlack: lengthToPx(read(style, "--k-tether-slack") || "0px"),
+    tetherAxis: read(style, "--k-tether-axis") || "both",
+    tetherLimit: optionalPx(read(style, "--k-tether-limit")),
+    group: "",
+    groupOrder: "",
+    groupIndex: 0,
+    groupCount: 0,
+    wave: optionalPx(read(style, "--k-wave")),
+    waveAxis: read(style, "--k-wave-axis") || "y",
+    waveSpread: Number.parseFloat(read(style, "--k-wave-spread") || "0.18") || 0.18,
+    waveRadius: lengthToPx(read(style, "--k-wave-radius") || "160px"),
+    ripple: optionalPx(read(style, "--k-ripple")),
+    rippleRadius: lengthToPx(read(style, "--k-ripple-radius") || "180px"),
+    rippleFalloff: falloffId(read(style, "--k-ripple-falloff") || "smooth"),
+    lensScale: lensScaleRaw && lensScaleRaw !== "none" ? Number.parseFloat(lensScaleRaw) || 1.25 : 1.25,
+    lensRadius: lengthToPx(lensRadiusRaw || "120px"),
+    lensOn: Boolean(lensScaleRaw && lensScaleRaw !== "none"),
+    bend: optionalDeg(read(style, "--k-bend")),
+    bendRadius: lengthToPx(read(style, "--k-bend-radius") || "160px"),
   }
 }
 
@@ -221,8 +492,26 @@ export function isMotionTarget(config: TargetConfig): boolean {
     config.scrollRotate !== 0 ||
     config.path !== "" ||
     config.audioBin >= 0 ||
-    (config.audioBand !== "none" && config.audioBand !== "")
+    (config.audioBand !== "none" && config.audioBand !== "") ||
+    config.face !== 0 ||
+    config.orbit !== 0 ||
+    config.vortex !== 0 ||
+    config.wind !== 0 ||
+    config.tether !== 0 ||
+    config.wave !== 0 ||
+    config.ripple !== 0 ||
+    config.lensOn ||
+    config.bend !== 0
   )
+}
+
+export function usesNamedAnchor(config: TargetConfig): boolean {
+  const anchor = config.anchor
+  return Boolean(anchor) && anchor !== "pointer" && anchor !== "auto"
+}
+
+export function isTimeDriven(config: TargetConfig): boolean {
+  return config.orbit !== 0 && config.orbitMode === "time" && usesNamedAnchor(config)
 }
 
 export interface PointerState {
@@ -275,6 +564,75 @@ export function restOutput(into?: MotionOutput): MotionOutput {
   return output
 }
 
+export function createComputeContext(): ComputeContext {
+  return {
+    clock: 0,
+    dt: 1 / 60,
+    velX: 0,
+    velY: 0,
+    speed: 0,
+    sceneX: 0,
+    sceneY: 0,
+    parentX: 0,
+    parentY: 0,
+    anchorX: 0,
+    anchorY: 0,
+    restX: 0,
+    restY: 0,
+    groupIndex: 0,
+    groupCount: 0,
+    orbitAngle: Number.NaN,
+    orbitVel: 0,
+    windNx: 0,
+    windNy: 0,
+    windGain: 0,
+    shape: SHAPE_CIRCLE,
+    anchorLeft: 0,
+    anchorTop: 0,
+    anchorW: 0,
+    anchorH: 0,
+    pointerLive: true,
+    sample: createFieldSample(),
+  }
+}
+
+function sampleToward(
+  config: TargetConfig,
+  radius: number,
+  falloff: number,
+  mode: number,
+  ctx: ComputeContext | undefined,
+  pointer: PointerState,
+  restX: number,
+  restY: number,
+  spin = 1,
+  pull = 0.35,
+): FieldSample {
+  const sample = ctx?.sample ?? createFieldSample()
+  const sourceX = ctx?.anchorX ?? pointer.x
+  const sourceY = ctx?.anchorY ?? pointer.y
+  return evaluateField(
+    sourceX,
+    sourceY,
+    restX,
+    restY,
+    radius,
+    falloff,
+    mode,
+    sample,
+    ctx?.shape ?? SHAPE_CIRCLE,
+    ctx?.anchorLeft ?? 0,
+    ctx?.anchorTop ?? 0,
+    ctx?.anchorW ?? 0,
+    ctx?.anchorH ?? 0,
+    spin,
+    pull,
+    ctx?.windNx ?? 0,
+    ctx?.windNy ?? 0,
+    config.orbitDirection,
+  )
+}
+
 export function computeOutput(
   config: TargetConfig,
   pointer: PointerState,
@@ -285,6 +643,7 @@ export function computeOutput(
   source = "pointer",
   delayed?: PointerState,
   into?: MotionOutput,
+  ctx?: ComputeContext,
 ): MotionOutput {
   const output = restOutput(into)
   if (!config.enabled || reduceMotion) return output
@@ -305,46 +664,196 @@ export function computeOutput(
   output.rotateZ += config.scrollRotate * scrollProgress * intensity
   if (config.path) output.path = clamp(scrollProgress * 100 * config.pathStrength, 0, 100)
 
+  const restX = ctx?.restX ?? rect.left + rect.width / 2
+  const restY = ctx?.restY ?? rect.top + rect.height / 2
+  const pointerAnchor = !config.anchor || config.anchor === "pointer"
+  const live = !pointerAnchor || ctx?.pointerLive !== false
   const following = config.follow !== "none" && config.follow !== ""
   const needsDistance =
-    config.magneticRadius > 0 || config.attract !== 0 || config.repel !== 0 || following || config.trail > 0
+    config.magneticRadius > 0 ||
+    config.attract !== 0 ||
+    config.repel !== 0 ||
+    following ||
+    config.trail > 0 ||
+    config.vortex !== 0 ||
+    config.wind !== 0 ||
+    config.ripple !== 0 ||
+    config.lensOn ||
+    config.bend !== 0
 
-  if (needsDistance) {
-    const cx = rect.left + rect.width / 2
-    const cy = rect.top + rect.height / 2
-    const dx = pointer.x - cx
-    const dy = pointer.y - cy
-    const dist = Math.hypot(dx, dy) || 1
-    const ux = dx / dist
-    const uy = dy / dist
-
+  if (needsDistance && live) {
     if (config.magneticRadius > 0) {
-      const t = 1 - clamp(dist / config.magneticRadius, 0, 1)
-      const strength = falloff(t, config.magneticFalloff) * config.magneticForce * intensity
-      const pull = strength * Math.min(dist, config.magneticRadius)
-      if (config.magneticAxis !== "y") output.x += ux * pull
-      if (config.magneticAxis !== "x") output.y += uy * pull
+      const sample = sampleToward(
+        config,
+        config.magneticRadius,
+        config.magneticFalloff,
+        MODE_ATTRACT,
+        ctx,
+        pointer,
+        restX,
+        restY,
+      )
+      if (sample.active) {
+        const travel = config.magneticForce * intensity * Math.min(sample.d, config.magneticRadius)
+        if (config.magneticAxis !== "y") output.x += sample.vx * travel
+        if (config.magneticAxis !== "x") output.y += sample.vy * travel
+      }
     }
 
-    if (config.attract !== 0 && dist < config.attractRadius) {
-      const t = 1 - dist / config.attractRadius
-      const pull = falloff(t, "smooth") * config.attract * intensity
-      output.x += ux * pull
-      output.y += uy * pull
+    if (config.attract !== 0) {
+      const sample = sampleToward(config, config.attractRadius, magneticFalloffId("smooth"), MODE_ATTRACT, ctx, pointer, restX, restY)
+      if (sample.active) {
+        output.x += sample.vx * config.attract * intensity
+        output.y += sample.vy * config.attract * intensity
+      }
     }
 
-    if (config.repel !== 0 && dist < config.repelRadius) {
-      const t = 1 - dist / config.repelRadius
-      const push = falloff(t, "smooth") * config.repel * intensity
-      output.x -= ux * push
-      output.y -= uy * push
+    if (config.repel !== 0) {
+      const sample = sampleToward(config, config.repelRadius, magneticFalloffId("smooth"), MODE_REPEL, ctx, pointer, restX, restY)
+      if (sample.active) {
+        output.x += sample.vx * config.repel * intensity
+        output.y += sample.vy * config.repel * intensity
+      }
+    }
+
+    if (config.vortex !== 0) {
+      const sample = sampleToward(
+        config,
+        config.vortexRadius,
+        config.vortexFalloff,
+        MODE_VORTEX,
+        ctx,
+        pointer,
+        restX,
+        restY,
+        config.vortexSpin,
+        config.vortexPull,
+      )
+      if (sample.active) {
+        const max = config.vortex * 80 * intensity
+        output.x += sample.vx * max
+        output.y += sample.vy * max
+      }
+    }
+
+    if (config.wind !== 0 && (ctx?.windGain ?? 0) >= config.windThreshold) {
+      const sample = sampleToward(config, config.windRadius, config.windFalloff, MODE_DIRECTIONAL, ctx, pointer, restX, restY)
+      if (sample.active) {
+        const gain = Math.min(ctx?.windGain ?? 0, config.windLimit)
+        output.x += sample.i * (ctx?.windNx ?? 0) * config.wind * gain * intensity
+        output.y += sample.i * (ctx?.windNy ?? 0) * config.wind * gain * intensity
+      }
+    }
+
+    if (config.ripple !== 0) {
+      const sample = sampleToward(config, config.rippleRadius, config.rippleFalloff, MODE_REPEL, ctx, pointer, restX, restY)
+      if (sample.active) {
+        output.x += sample.vx * config.ripple * intensity
+        output.y += sample.vy * config.ripple * intensity
+      }
+    }
+
+    if (config.lensOn) {
+      const sample = sampleToward(config, config.lensRadius, falloffId("smooth"), MODE_ATTRACT, ctx, pointer, restX, restY)
+      const scale = lerp(1, config.lensScale, sample.i)
+      output.scaleX *= scale
+      output.scaleY *= scale
+    }
+
+    if (config.bend !== 0) {
+      const sample = sampleToward(config, config.bendRadius, falloffId("smooth"), MODE_ATTRACT, ctx, pointer, restX, restY)
+      if (sample.active) {
+        const signed = restX - (ctx?.anchorX ?? pointer.x)
+        output.rotateZ += Math.sign(signed || 1) * sample.i * config.bend * intensity
+        output.y += sample.i * config.bend * 0.35 * intensity * Math.sign(signed || 1)
+      }
     }
 
     if (following || config.trail > 0) {
       const chase = config.trail > 0 && delayed ? delayed : pointer
-      output.x += (chase.x - cx) * intensity + (following ? config.followOffsetX : 0)
-      output.y += (chase.y - cy) * intensity + (following ? config.followOffsetY : 0)
+      output.x += (chase.x - restX) * intensity + (following ? config.followOffsetX : 0)
+      output.y += (chase.y - restY) * intensity + (following ? config.followOffsetY : 0)
     }
+  }
+
+  if (live && config.orbit !== 0) {
+    const ax = ctx?.anchorX ?? pointer.x
+    const ay = ctx?.anchorY ?? pointer.y
+    let angle = 0
+    if (config.orbitMode === "position") {
+      angle = Math.atan2(pointer.y - ay, pointer.x - ax) + (config.orbitPhase * Math.PI) / 180
+    } else if (config.orbitMode === "inertial" && ctx) {
+      const want = Math.atan2(pointer.y - ay, pointer.x - ax)
+      if (!Number.isFinite(ctx.orbitAngle)) ctx.orbitAngle = want + (config.orbitPhase * Math.PI) / 180
+      let delta = want - ctx.orbitAngle
+      if (delta > Math.PI) delta -= Math.PI * 2
+      if (delta < -Math.PI) delta += Math.PI * 2
+      ctx.orbitVel += delta * 12 * ctx.dt
+      ctx.orbitAngle += ctx.orbitVel * ctx.dt
+      ctx.orbitVel *= 0.9
+      angle = ctx.orbitAngle
+    } else {
+      angle = orbitAngle(ctx?.clock ?? 0, config.orbitSpeed, config.orbitDirection, config.orbitPhase)
+    }
+    output.x += ax + Math.cos(angle) * config.orbit - restX
+    output.y += ay + Math.sin(angle) * config.orbit - restY
+  }
+
+  if (live && config.tether !== 0) {
+    const ax = ctx?.anchorX ?? pointer.x
+    const ay = ctx?.anchorY ?? pointer.y
+    let dx = ax - restX
+    let dy = ay - restY
+    if (config.tetherAxis === "x") dy = 0
+    if (config.tetherAxis === "y") dx = 0
+    const d = Math.hypot(dx, dy)
+    const reach = config.tether + config.tetherSlack
+    if (d > reach) {
+      let ox = dx * ((d - config.tether) / d)
+      let oy = dy * ((d - config.tether) / d)
+      if (config.tetherLimit > 0) {
+        const mag = Math.hypot(ox, oy)
+        if (mag > config.tetherLimit) {
+          ox *= config.tetherLimit / mag
+          oy *= config.tetherLimit / mag
+        }
+      }
+      output.x += ox * intensity
+      output.y += oy * intensity
+    }
+  }
+
+  if (live && config.face !== 0) {
+    const ax = ctx?.anchorX ?? pointer.x
+    const ay = ctx?.anchorY ?? pointer.y
+    const dx = ax - restX
+    const dy = ay - restY
+    if (dx * dx + dy * dy > 1e-6) {
+      let deg = (Math.atan2(dy, dx) * 180) / Math.PI
+      if (config.faceInvert) deg += 180
+      const turned = clamp(deg, -config.face, config.face) * intensity
+      if (config.faceAxis === "x") output.rotateY += turned
+      else if (config.faceAxis === "y") output.rotateX += turned
+      else output.rotateZ += turned
+    }
+  }
+
+  if (live && config.wave !== 0) {
+    const count = ctx?.groupCount || config.groupCount || 1
+    const index = ctx?.groupIndex ?? config.groupIndex
+    const spatial = config.groupOrder === "spatial"
+    let influence = 0
+    if (spatial) {
+      const sample = sampleToward(config, config.waveRadius, falloffId("smooth"), MODE_ATTRACT, ctx, pointer, restX, restY)
+      influence = sample.i
+    } else {
+      const cursor = (nx + 1) * 0.5
+      const t = count > 1 ? (index + 0.5) / count : 0.5
+      const spread = Math.max(config.waveSpread, 0.001)
+      influence = fieldInfluence(1 - clamp(Math.abs(t - cursor) / spread, 0, 1))
+    }
+    if (config.waveAxis !== "y") output.x += influence * config.wave * intensity
+    if (config.waveAxis !== "x") output.y += influence * config.wave * intensity
   }
 
   output.x += config.scrollX * scrollProgress * intensity
@@ -356,6 +865,11 @@ export function computeOutput(
     if (config.audioBin < 0) output.scaleX = scale
   }
   return output
+}
+
+function fieldInfluence(t: number): number {
+  const x = t < 0 ? 0 : t > 1 ? 1 : t
+  return x * x * (3 - 2 * x)
 }
 
 function motionPreset(config: TargetConfig) {
@@ -386,6 +900,11 @@ export class TargetRuntime {
   proximityRadius = 0
   usesAudio = false
   usesPath = false
+  usesAnchor = false
+  timeDriven = false
+  hitGen = 0
+  orbitAngle = Number.NaN
+  orbitVel = 0
   readonly scratch: MotionOutput = restOutput()
   private springs: Record<keyof MotionOutput, Spring>
   private drive: Record<keyof MotionOutput, boolean> = {
@@ -446,20 +965,24 @@ export class TargetRuntime {
     const follow = config.follow !== "none" && config.follow !== ""
     const audio = config.audioBin >= 0 || (config.audioBand !== "none" && config.audioBand !== "")
     const pull = config.magneticRadius > 0 || config.attract !== 0 || config.repel !== 0
+    const field = pull || config.vortex !== 0 || config.wind !== 0 || config.ripple !== 0 || config.lensOn || config.bend !== 0
+    const shift = pull || follow || config.trail || config.scrollX || config.orbit || config.vortex || config.wind || config.tether || config.wave || config.ripple || config.bend
     this.bound = CHANNELS.some((key) => !!this.bindings[key])
-    this.drive.x = !!(config.parallaxX || pull || follow || config.trail || config.scrollX || this.bindings.x)
-    this.drive.y = !!(config.parallaxY || pull || follow || config.trail || config.scrollY || this.bindings.y)
+    this.drive.x = !!(config.parallaxX || shift || this.bindings.x)
+    this.drive.y = !!(config.parallaxY || shift || this.bindings.y)
     this.drive.z = !!(config.depth || this.bindings.z)
-    this.drive.rotateX = !!(config.tiltX || this.bindings.rotateX)
-    this.drive.rotateY = !!(config.tiltY || this.bindings.rotateY)
-    this.drive.rotateZ = !!(config.rotate || config.scrollRotate || this.bindings.rotateZ)
-    this.drive.scaleX = !!((audio && config.audioBin < 0) || this.bindings.scaleX)
-    this.drive.scaleY = !!(audio || this.bindings.scaleY)
+    this.drive.rotateX = !!(config.tiltX || (config.face && config.faceAxis === "y") || this.bindings.rotateX)
+    this.drive.rotateY = !!(config.tiltY || (config.face && config.faceAxis === "x") || this.bindings.rotateY)
+    this.drive.rotateZ = !!(config.rotate || config.scrollRotate || config.face || config.bend || this.bindings.rotateZ)
+    this.drive.scaleX = !!((audio && config.audioBin < 0) || config.lensOn || this.bindings.scaleX)
+    this.drive.scaleY = !!(audio || config.lensOn || this.bindings.scaleY)
     this.drive.path = !!(config.path || this.bindings.path)
     this.usesAudio = audio
     this.usesPath = !!config.path
+    this.usesAnchor = usesNamedAnchor(config)
+    this.timeDriven = isTimeDriven(config)
     this.proximityOnly =
-      pull &&
+      field &&
       !this.bound &&
       !config.parallaxX &&
       !config.parallaxY &&
@@ -473,11 +996,21 @@ export class TargetRuntime {
       !config.path &&
       !audio &&
       !follow &&
-      !config.trail
+      !config.trail &&
+      !config.orbit &&
+      !config.tether &&
+      !config.face &&
+      !config.wave &&
+      !this.usesAnchor
     this.proximityRadius = Math.max(
       config.repel ? config.repelRadius : 0,
       config.attract ? config.attractRadius : 0,
       config.magneticRadius,
+      config.vortex ? config.vortexRadius : 0,
+      config.wind ? config.windRadius : 0,
+      config.ripple ? config.rippleRadius : 0,
+      config.lensOn ? config.lensRadius : 0,
+      config.bend ? config.bendRadius : 0,
     )
   }
 

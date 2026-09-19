@@ -1,14 +1,21 @@
 import {
+  applyGroupConfig,
   computeOutput,
+  createComputeContext,
   isMotionTarget,
+  isTimeDriven,
+  parseGroupConfig,
   parseTargetConfig,
   restOutput,
   shouldReduceMotion,
   TargetRuntime,
+  type ComputeContext,
+  type GroupConfig,
   type MotionOutput,
   type PointerState,
   type TargetConfig,
 } from "./effects"
+import { SHAPE_CIRCLE, SHAPE_ELEMENT, SpatialHash } from "./field"
 import { KSignal } from "./signal"
 import { KinesisAudio, type AudioSourceInput } from "./audio"
 import { registerCssProperties } from "./register"
@@ -26,9 +33,43 @@ export interface MotionHandle {
   tilt(value: { x?: number; y?: number }): this
   magnetic(value: { radius?: number; force?: number }): this
   audio(value: { source: KinesisAudio; band?: string; scale?: number[]; motion?: string }): this
+  orbit(value: { radius?: number; speed?: number; direction?: string; mode?: string; phase?: number }): this
+  tether(value: { to?: string; length?: number; slack?: number; axis?: string }): this
+  face(value: { to?: string; max?: number; axis?: string; invert?: boolean }): this
+  vortex(value: { strength?: number; radius?: number; spin?: number; pull?: number }): this
+  wind(value: { amount?: number; radius?: number }): this
   pause(): this
   resume(): this
   refresh(): this
+  destroy(): void
+}
+
+export interface GroupHandle {
+  wave(value?: { amount?: number; spread?: number; axis?: string }): this
+  ripple(value?: { amount?: number; radius?: number; topology?: string }): this
+  lens(value?: { scale?: number; radius?: number }): this
+  bend(value?: { amount?: number; radius?: number }): this
+  orbit(value?: { radius?: number; speed?: number }): this
+}
+
+export type FieldForce = "attract" | "repel" | "orbit" | "vortex" | "directional"
+export type FieldShape = "circle" | "element"
+export type FalloffName = "linear" | "smooth" | "soft" | "sharp" | "constant"
+
+export interface FieldOptions {
+  source?: string
+  force: FieldForce
+  shape?: FieldShape
+  radius?: number
+  strength?: number
+  falloff?: FalloffName
+  direction?: "clockwise" | "counter-clockwise"
+}
+
+export interface FieldHandle {
+  apply(targets: string | HTMLElement, response?: { max?: number }): MotionHandle
+  pause(): this
+  resume(): this
   destroy(): void
 }
 
@@ -84,6 +125,8 @@ export interface KinesisScope {
   audio(source?: AudioSourceInput): KinesisAudio
   proximity(selector: string | HTMLElement): ProximitySignals
   inView(selector: string | HTMLElement): ViewSignals
+  group(selector?: string | HTMLElement): GroupHandle
+  field(options: FieldOptions): FieldHandle
   pause(): void
   resume(): void
   refresh(): void
@@ -116,6 +159,26 @@ const PROPERTY_MAP: Record<string, string> = {
   springDamping: "--k-spring-damping",
   springMass: "--k-spring-mass",
   smoothing: "--k-smoothing",
+  anchor: "--k-anchor",
+  orbit: "--k-orbit",
+  orbitSpeed: "--k-orbit-speed",
+  orbitDirection: "--k-orbit-direction",
+  orbitMode: "--k-orbit-mode",
+  orbitPhase: "--k-orbit-phase",
+  vortex: "--k-vortex",
+  vortexRadius: "--k-vortex-radius",
+  vortexSpin: "--k-vortex-spin",
+  vortexPull: "--k-vortex-pull",
+  wind: "--k-wind",
+  windRadius: "--k-wind-radius",
+  tether: "--k-tether",
+  tetherSlack: "--k-tether-slack",
+  face: "--k-face",
+  wave: "--k-wave",
+  ripple: "--k-ripple",
+  lensScale: "--k-lens-scale",
+  lensRadius: "--k-lens-radius",
+  bend: "--k-bend",
 }
 
 function formatCssValue(name: string, value: string | number | number[]): string {
@@ -125,20 +188,15 @@ function formatCssValue(name: string, value: string | number | number[]): string
     return value.map((item) => `${item}px`).join(" ")
   }
   if (typeof value === "number") {
-    if (name.includes("tilt") || name.includes("rotate")) return `${value}deg`
+    if (/tilt|rotate|face|bend|phase/.test(name)) return `${value}deg`
     if (
-      name.includes("force") ||
-      name.includes("intensity") ||
-      name.includes("depth") ||
-      name.includes("audio") ||
-      name.includes("spring") ||
-      name.includes("smoothing") ||
-      name === "--k-motion"
+      /force|intensity|depth|audio|spring|smoothing|vortex|spin|pull|speed|spread|scale|threshold|limit|invert|trail/.test(name) ||
+      name === "--k-motion" ||
+      name === "--k-source"
     ) {
       return String(value)
     }
-    if (name === "--k-motion" || name === "--k-source") return String(value)
-    return `${value}${name.includes("radius") || name.includes("parallax") || name.includes("repel") || name.includes("attract") ? "px" : ""}`
+    return `${value}px`
   }
   return value
 }
@@ -201,6 +259,45 @@ function createHandle(element: HTMLElement, runtime: ScopeRuntime): MotionHandle
         ...(value.motion ? { motion: value.motion } : {}),
       })
     },
+    orbit(value) {
+      return this.set({
+        orbit: value.radius ?? 80,
+        orbitSpeed: value.speed ?? 0.25,
+        ...(value.direction ? { orbitDirection: value.direction } : {}),
+        ...(value.mode ? { orbitMode: value.mode } : {}),
+        ...(value.phase != null ? { orbitPhase: value.phase } : {}),
+      })
+    },
+    tether(value) {
+      return this.set({
+        tether: value.length ?? 80,
+        ...(value.to ? { anchor: value.to } : {}),
+        ...(value.slack != null ? { tetherSlack: value.slack } : {}),
+        ...(value.axis ? { "--k-tether-axis": value.axis } : {}),
+      })
+    },
+    face(value) {
+      return this.set({
+        face: value.max ?? 14,
+        ...(value.to ? { anchor: value.to } : {}),
+        ...(value.axis ? { "--k-face-axis": value.axis } : {}),
+        ...(value.invert ? { "--k-face-invert": 1 } : {}),
+      })
+    },
+    vortex(value) {
+      return this.set({
+        vortex: value.strength ?? 0.7,
+        vortexRadius: value.radius ?? 200,
+        ...(value.spin != null ? { vortexSpin: value.spin } : {}),
+        ...(value.pull != null ? { vortexPull: value.pull } : {}),
+      })
+    },
+    wind(value) {
+      return this.set({
+        wind: value.amount ?? 36,
+        windRadius: value.radius ?? 200,
+      })
+    },
     pause() {
       runtime.ensureTarget(element).paused = true
       return this
@@ -227,6 +324,7 @@ const kernel = {
   byRoot: new WeakMap<Element, ScopeRuntime>(),
   hooked: false,
   ticking: false,
+  hidden: typeof document !== "undefined" ? document.hidden : false,
   frame: 0,
   scrollRaf: 0,
   io: undefined as IntersectionObserver | undefined,
@@ -236,12 +334,14 @@ const kernel = {
     this.io?.observe(scope.root)
     if (this.hooked) return
     this.hooked = true
+    this.hidden = document.hidden
     window.addEventListener("scroll", this.scroll, { passive: true })
     window.addEventListener("resize", this.resize, { passive: true })
     window.addEventListener("pointerdown", this.press, { passive: true })
     window.addEventListener("pointerup", this.press, { passive: true })
     window.addEventListener("pointercancel", this.press, { passive: true })
     window.addEventListener("deviceorientation", this.orient)
+    document.addEventListener("visibilitychange", this.visibility)
     if (typeof IntersectionObserver !== "undefined") {
       this.io = new IntersectionObserver(this.intersect, { rootMargin: "40% 0px", threshold: 0 })
       this.io.observe(scope.root)
@@ -270,9 +370,25 @@ const kernel = {
     window.removeEventListener("pointerup", this.press)
     window.removeEventListener("pointercancel", this.press)
     window.removeEventListener("deviceorientation", this.orient)
+    document.removeEventListener("visibilitychange", this.visibility)
+  },
+  visibility() {
+    kernel.hidden = document.hidden
+    if (kernel.hidden) {
+      if (kernel.frame) {
+        window.cancelAnimationFrame(kernel.frame)
+        kernel.frame = 0
+      }
+      kernel.ticking = false
+      return
+    }
+    kernel.members.forEach((scope) => {
+      scope.rewindClock()
+      kernel.wake(scope)
+    })
   },
   wake(scope: ScopeRuntime) {
-    if (!scope.canWake()) return
+    if (this.hidden || !scope.canWake()) return
     if (!this.awake.has(scope)) {
       scope.rewindClock()
       this.awake.add(scope)
@@ -379,6 +495,19 @@ class ScopeRuntime implements KinesisScope {
   private unbind: Array<() => void> = []
   private audios: KinesisAudio[] = []
   private audioFor = new WeakMap<HTMLElement, KinesisAudio>()
+  private list: TargetRuntime[] = []
+  private named = new Map<string, { el: HTMLElement; box: { left: number; top: number; width: number; height: number } }>()
+  private parents = new Map<HTMLElement, { left: number; top: number; width: number; height: number }>()
+  private parentEls = new Set<HTMLElement>()
+  private hash = new SpatialHash()
+  private hashHits: number[] = []
+  private hashDirty = true
+  private queryGen = 0
+  private maxFieldRadius = 0
+  private timeDriven = false
+  private fieldCount = 0
+  private clock = 0
+  private frameCtx: ComputeContext = createComputeContext()
 
   constructor(root: HTMLElement) {
     this.root = root
@@ -519,7 +648,7 @@ class ScopeRuntime implements KinesisScope {
   }
 
   canWake(): boolean {
-    return !this.destroyed && !this.paused && this.visible
+    return !this.destroyed && !this.paused && this.visible && !kernel.hidden
   }
 
   rewindClock(): void {
@@ -589,9 +718,11 @@ class ScopeRuntime implements KinesisScope {
     const dy = y - this.measuredScrollY
     if (dx || dy) {
       if (this.rootRect) this.nudgeBox(this.rootRect, dx, dy)
-      this.targets.forEach((target) => {
-        if (target.rect) this.nudgeBox(target.rect, dx, dy)
-      })
+    this.targets.forEach((target) => {
+      if (target.rect) this.nudgeBox(target.rect, dx, dy)
+    })
+    this.named.forEach((entry) => this.nudgeBox(entry.box, dx, dy))
+    this.parents.forEach((box) => this.nudgeBox(box, dx, dy))
     }
     this.measuredScrollX = x
     this.measuredScrollY = y
@@ -602,7 +733,12 @@ class ScopeRuntime implements KinesisScope {
     let orient = false
     let depth = false
     let tilt = false
-    const consider = (config?: TargetConfig) => {
+    let time = false
+    let fields = 0
+    let radius = 0
+    this.list.length = 0
+    this.parentEls.clear()
+    const consider = (config?: TargetConfig, target?: TargetRuntime) => {
       if (!config) return
       if (
         config.source === "scroll" ||
@@ -616,13 +752,29 @@ class ScopeRuntime implements KinesisScope {
       if (config.source === "orientation") orient = true
       if (config.depth) depth = true
       if (config.tiltX || config.tiltY || config.depth) tilt = true
+      if (isTimeDriven(config)) time = true
+      if (target?.proximityRadius) {
+        fields += 1
+        if (target.proximityRadius > radius) radius = target.proximityRadius
+      }
+      if (config.anchor === "parent" && target) {
+        const parent = target.element.parentElement
+        if (parent instanceof HTMLElement) this.parentEls.add(parent)
+      }
     }
     consider(this.scopeConfig)
-    this.targets.forEach((target) => consider(target.config))
+    this.targets.forEach((target) => {
+      this.list.push(target)
+      consider(target.config, target)
+    })
     this.scrollDriven = scroll
     this.orientDriven = orient
     this.depthScene = depth
     this.threeD = !!this.sceneEl || depth || tilt
+    this.timeDriven = time
+    this.fieldCount = fields
+    this.maxFieldRadius = radius
+    this.hashDirty = true
   }
 
   private readScopeConfig(): TargetConfig {
@@ -709,12 +861,22 @@ class ScopeRuntime implements KinesisScope {
     this.targets.forEach((target) => {
       target.rect = this.copyBox(target.element.getBoundingClientRect())
     })
+    this.named.forEach((entry) => {
+      const existing = this.targets.get(entry.el)
+      entry.box = existing?.rect ? { ...existing.rect } : this.copyBox(entry.el.getBoundingClientRect())
+    })
+    this.parents.clear()
+    this.parentEls.forEach((node) => {
+      const existing = this.targets.get(node)
+      this.parents.set(node, existing?.rect ? { ...existing.rect } : this.copyBox(node.getBoundingClientRect()))
+    })
     for (let index = 0; index < restores.length; index += 1) {
       const item = restores[index]
       if (item) item.node.style.transform = item.transform
     }
     this.measuredScrollX = window.scrollX || 0
     this.measuredScrollY = window.scrollY || 0
+    this.hashDirty = true
   }
 
   private simulateScene(dt: number, reduce: boolean, snap = false): boolean {
@@ -780,14 +942,40 @@ class ScopeRuntime implements KinesisScope {
     this.sceneEl = this.root.querySelector<HTMLElement>("[data-k-scene]") ?? undefined
     const nodes = [this.root, ...Array.from(this.root.querySelectorAll<HTMLElement>("*"))].filter((node) => this.owns(node))
     const seen = new Set<HTMLElement>()
+    const groups: Array<{ node: HTMLElement; group: GroupConfig }> = []
+    this.named.clear()
     nodes.forEach((node) => {
+      const style = getComputedStyle(node)
+      const name = style.getPropertyValue("--k-anchor-name").trim()
+      if (name && name !== "none") {
+        if (!this.named.has(name)) this.named.set(name, { el: node, box: { left: 0, top: 0, width: 0, height: 0 } })
+      }
+      const group = parseGroupConfig(style)
+      if (group.kind) groups.push({ node, group })
       if (node === this.root) return
-      const config = parseTargetConfig(getComputedStyle(node))
+      const config = parseTargetConfig(style)
       if (!isMotionTarget(config)) return
       seen.add(node)
       const existing = this.targets.get(node)
       if (existing) existing.refresh(config)
       else this.targets.set(node, new TargetRuntime(node, config))
+    })
+    groups.forEach((entry) => {
+      const kids = Array.from(entry.node.children).filter((node): node is HTMLElement => node instanceof HTMLElement && this.owns(node))
+      kids.forEach((kid, index) => {
+        let target = this.targets.get(kid)
+        if (!target) {
+          const config = parseTargetConfig(getComputedStyle(kid))
+          applyGroupConfig(config, entry.group, index, kids.length)
+          if (!isMotionTarget(config)) return
+          target = new TargetRuntime(kid, config)
+          this.targets.set(kid, target)
+        } else {
+          applyGroupConfig(target.config, entry.group, index, kids.length)
+          target.refresh(target.config)
+        }
+        seen.add(kid)
+      })
     })
     Array.from(this.targets.keys()).forEach((node) => {
       if (!seen.has(node)) {
@@ -826,26 +1014,62 @@ class ScopeRuntime implements KinesisScope {
     const scopeConfig = this.scopeConfig ?? this.readScopeConfig()
     const reduceScene = shouldReduceMotion(scopeConfig, this.systemReduce)
     if (this.simulateScene(dt, reduceScene, snap)) active = true
+    this.clock += dt
+    const ctx = this.frameCtx
+    ctx.clock = this.clock
+    ctx.dt = dt
+    ctx.velX = this.velocity.x
+    ctx.velY = this.velocity.y
+    ctx.speed = Math.hypot(this.velocity.x, this.velocity.y)
+    ctx.windGain = Math.min(ctx.speed / 1200, 1)
+    if (ctx.speed > 1e-6) {
+      ctx.windNx = this.velocity.x / ctx.speed
+      ctx.windNy = this.velocity.y / ctx.speed
+    } else {
+      ctx.windNx = 0
+      ctx.windNy = 0
+    }
+    if (this.rootRect) {
+      ctx.sceneX = this.rootRect.left + this.rootRect.width / 2
+      ctx.sceneY = this.rootRect.top + this.rootRect.height / 2
+    }
+    ctx.pointerLive = this.pointerInside || this.windowPointer
+    const useHash = this.fieldCount > 0 && this.list.length >= 32
+    if (useHash && this.hashDirty) this.rebuildHash()
+    if (useHash) {
+      this.queryGen += 1
+      const hits = this.hash.query(this.pointerState.x, this.pointerState.y, this.maxFieldRadius, this.hashHits)
+      for (let index = 0; index < hits; index += 1) {
+        const target = this.list[this.hashHits[index] ?? -1]
+        if (target) target.hitGen = this.queryGen
+      }
+    }
     const rootProgress = this.scrollDriven ? this.scrollProgress(this.root) : 0
-    this.targets.forEach((target) => {
-      if (target.paused) return
+    const count = this.list.length
+    for (let index = 0; index < count; index += 1) {
+      const target = this.list[index]
+      if (!target || target.paused) continue
       if (!target.rect) this.measure(target)
       const config = target.config
       const reduce = shouldReduceMotion(config, this.systemReduce)
       const source = this.resolveSource(config)
       const pointer = this.inputFor(config, target.element)
-      if (!this.pointerInside && source === "pointer" && target.rect) {
+      if (!this.pointerInside && source === "pointer" && target.rect && !target.usesAnchor) {
         pointer.nx = 0
         pointer.ny = 0
         pointer.x = target.rect.left + target.rect.width / 2
         pointer.y = target.rect.top + target.rect.height / 2
       }
-      const culled = target.outsideProximity(pointer)
-      if (culled && !target.busy) return
+      const hashed = useHash && target.proximityOnly && target.hitGen !== this.queryGen
+      const culled = hashed || target.outsideProximity(pointer)
+      if (culled && !target.busy) continue
       if (culled) {
         if (target.simulate(restOutput(target.scratch), dt, reduce, snap)) active = true
-        return
+        continue
       }
+      this.fillAnchor(target, pointer, ctx)
+      ctx.orbitAngle = target.orbitAngle
+      ctx.orbitVel = target.orbitVel
       const delayed = config.trail > 0 ? this.pointerAt(config.trail * 100) : undefined
       let audioLevel = 0
       if (target.usesAudio) {
@@ -868,9 +1092,13 @@ class ScopeRuntime implements KinesisScope {
         source,
         delayed,
         target.scratch,
+        ctx,
       )
+      target.orbitAngle = ctx.orbitAngle
+      target.orbitVel = ctx.orbitVel
       if (target.simulate(output, dt, reduce, snap)) active = true
-    })
+    }
+    if (this.timeDriven) active = true
     if (this.scrollDriven) {
       if (Math.abs(rootProgress - this.lastViewProgress) > 0.0008) active = true
       this.lastViewProgress = rootProgress
@@ -1037,6 +1265,166 @@ class ScopeRuntime implements KinesisScope {
 
   motion(selector: string | HTMLElement): MotionHandle {
     return createHandle(this.locate(selector), this)
+  }
+
+  group(selector?: string | HTMLElement): GroupHandle {
+    const element = selector ? this.locate(selector) : this.root
+    const apply = (kind: string, values: Record<string, string | number>) => {
+      element.style.setProperty("--k-group", kind)
+      Object.entries(values).forEach(([key, value]) => {
+        element.style.setProperty(key, formatCssValue(key, value))
+      })
+      this.refresh()
+      this.resume()
+      return handle
+    }
+    const handle: GroupHandle = {
+      wave: (value = {}) =>
+        apply("wave", {
+          "--k-wave": value.amount ?? 24,
+          "--k-wave-spread": value.spread ?? 0.18,
+          ...(value.axis ? { "--k-wave-axis": value.axis } : {}),
+        }),
+      ripple: (value = {}) =>
+        apply("ripple", {
+          "--k-ripple": value.amount ?? 20,
+          "--k-ripple-radius": value.radius ?? 180,
+          ...(value.topology ? { "--k-group-order": value.topology } : {}),
+        }),
+      lens: (value = {}) =>
+        apply("lens", {
+          "--k-lens-scale": value.scale ?? 1.25,
+          "--k-lens-radius": value.radius ?? 120,
+        }),
+      bend: (value = {}) =>
+        apply("bend", {
+          "--k-bend": value.amount ?? 18,
+          "--k-bend-radius": value.radius ?? 160,
+        }),
+      orbit: (value = {}) =>
+        apply("orbit", {
+          "--k-orbit": value.radius ?? 80,
+          "--k-orbit-speed": value.speed ?? 0.25,
+        }),
+    }
+    return handle
+  }
+
+  field(options: FieldOptions): FieldHandle {
+    let applied: MotionHandle | undefined
+    const handle: FieldHandle = {
+      apply: (targets, response) => {
+        const amount = response?.max ?? options.strength ?? 32
+        const radius = options.radius ?? 200
+        const values: Record<string, string | number> = {}
+        if (options.source) values.anchor = options.source
+        if (options.force === "repel") {
+          values["--k-repel"] = amount
+          values["--k-repel-radius"] = radius
+        } else if (options.force === "attract") {
+          values["--k-attract"] = amount
+          values["--k-attract-radius"] = radius
+        } else if (options.force === "vortex") {
+          values.vortex = options.strength ?? 0.7
+          values.vortexRadius = radius
+        } else if (options.force === "orbit") {
+          values.orbit = radius
+        } else {
+          values.wind = amount
+          values.windRadius = radius
+        }
+        if (options.direction) values.orbitDirection = options.direction
+        applied = createHandle(this.locate(targets), this).set(values)
+        return applied
+      },
+      pause() {
+        applied?.pause()
+        return handle
+      },
+      resume() {
+        applied?.resume()
+        return handle
+      },
+      destroy() {
+        applied?.destroy()
+      },
+    }
+    return handle
+  }
+
+  private rebuildHash(): void {
+    this.hash.setSize(this.maxFieldRadius || 160)
+    this.hash.clear()
+    const count = this.list.length
+    for (let index = 0; index < count; index += 1) {
+      const target = this.list[index]
+      if (!target?.rect || !target.proximityOnly) continue
+      this.hash.insert(index, target.rect.left + target.rect.width / 2, target.rect.top + target.rect.height / 2)
+    }
+    this.hashDirty = false
+  }
+
+  private fillAnchor(target: TargetRuntime, pointer: PointerState, ctx: ComputeContext): void {
+    const rect = target.rect
+    ctx.restX = rect ? rect.left + rect.width / 2 : pointer.x
+    ctx.restY = rect ? rect.top + rect.height / 2 : pointer.y
+    ctx.groupIndex = target.config.groupIndex
+    ctx.groupCount = target.config.groupCount
+    ctx.shape = SHAPE_CIRCLE
+    ctx.anchorW = 0
+    ctx.anchorH = 0
+    const parent = target.element.parentElement
+    if (parent instanceof HTMLElement) {
+      const box = this.parents.get(parent) ?? this.targets.get(parent)?.rect
+      if (box) {
+        ctx.parentX = box.left + box.width / 2
+        ctx.parentY = box.top + box.height / 2
+      } else {
+        ctx.parentX = ctx.sceneX
+        ctx.parentY = ctx.sceneY
+      }
+    }
+    const name = target.config.anchor
+    if (!name || name === "pointer") {
+      ctx.anchorX = pointer.x
+      ctx.anchorY = pointer.y
+      return
+    }
+    if (name === "scene") {
+      ctx.anchorX = ctx.sceneX
+      ctx.anchorY = ctx.sceneY
+      if (this.rootRect) {
+        ctx.shape = SHAPE_ELEMENT
+        ctx.anchorLeft = this.rootRect.left
+        ctx.anchorTop = this.rootRect.top
+        ctx.anchorW = this.rootRect.width
+        ctx.anchorH = this.rootRect.height
+      }
+      return
+    }
+    if (name === "self") {
+      ctx.anchorX = ctx.restX
+      ctx.anchorY = ctx.restY
+      return
+    }
+    if (name === "parent") {
+      ctx.anchorX = ctx.parentX
+      ctx.anchorY = ctx.parentY
+      return
+    }
+    const named = this.named.get(name)
+    if (named?.box.width || named?.box.height) {
+      ctx.anchorX = named.box.left + named.box.width / 2
+      ctx.anchorY = named.box.top + named.box.height / 2
+      ctx.shape = SHAPE_ELEMENT
+      ctx.anchorLeft = named.box.left
+      ctx.anchorTop = named.box.top
+      ctx.anchorW = named.box.width
+      ctx.anchorH = named.box.height
+      return
+    }
+    ctx.anchorX = ctx.restX
+    ctx.anchorY = ctx.restY
   }
 
   pause(): void {

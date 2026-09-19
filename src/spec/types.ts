@@ -12,6 +12,10 @@ export type PropertyCategory =
   | "path"
   | "physics"
   | "audio"
+  | "field"
+  | "orbit"
+  | "relationship"
+  | "group"
 export type PreviewKind =
   | "source"
   | "motion"
