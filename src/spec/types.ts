@@ -1,4 +1,4 @@
-export type PropertyStatus = "stable" | "experimental" | "deprecated" | "candidate" | "plugin" | "abandoned"
+export type PropertyStatus = "stable" | "experimental" | "deprecated" | "candidate" | "plugin" | "abandoned" | "folded"
 export type PropertyCategory =
   | "context"
   | "depth"

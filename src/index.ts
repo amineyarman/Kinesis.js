@@ -39,6 +39,13 @@ export {
   motionPresets,
   defaultMotionPreset,
   getMotionPreset,
+  kinesisRegistry,
+  kinesisRegistryMap,
+  registryLanes,
+  getRegistryEntry,
+  registryLane,
+  publicShipInteractions,
+  registryByLane,
 } from "./spec"
 export type {
   CssPropertySpec,
@@ -46,4 +53,9 @@ export type {
   PreviewKind,
   PropertyCategory,
   PropertyStatus,
+  KinesisKind,
+  KinesisStatus,
+  RegistryEntry,
+  RegistryLane,
+  RegistryOwner,
 } from "./spec"
