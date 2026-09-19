@@ -1,7 +1,7 @@
 import { expect, it } from "vitest"
 import { constrainDrag } from "../drag"
 import { computeEdge } from "../edge"
-import { computeOutput, createComputeContext, defaults, solveChain, type TargetConfig } from "../effects"
+import { computeOutput, createComputeContext, defaults, shouldReduceMotion, solveChain, type TargetConfig } from "../effects"
 
 const base = (overrides: Partial<TargetConfig> = {}): TargetConfig => ({
   ...defaults,
@@ -164,4 +164,12 @@ it("reduced motion is still", () => {
   )
   expect(output.x).toBe(0)
   expect(output.rotateY).toBe(0)
+})
+
+it("reduced-motion policy is respect reduce none ignore", () => {
+  expect(shouldReduceMotion(base({ reducedMotion: "ignore" }), true)).toBe(false)
+  expect(shouldReduceMotion(base({ reducedMotion: "respect" }), false)).toBe(false)
+  expect(shouldReduceMotion(base({ reducedMotion: "respect" }), true)).toBe(true)
+  expect(shouldReduceMotion(base({ reducedMotion: "reduce" }), false)).toBe(true)
+  expect(shouldReduceMotion(base({ reducedMotion: "none" }), false)).toBe(true)
 })

@@ -1130,9 +1130,23 @@ export class TargetRuntime {
   private drawnSy = NaN
   private drawnPath = NaN
   private bound = false
+  private owned = {
+    transform: "",
+    transformOrigin: "",
+    offsetPath: "",
+    offsetDistance: "",
+    offsetRotate: "",
+  }
 
   constructor(element: HTMLElement, config: TargetConfig) {
     this.element = element
+    this.owned = {
+      transform: element.style.transform,
+      transformOrigin: element.style.transformOrigin,
+      offsetPath: element.style.offsetPath,
+      offsetDistance: element.style.offsetDistance,
+      offsetRotate: element.style.offsetRotate,
+    }
     this.config = config
     const preset = motionPreset(config)
     const make = (initial = 0) => new Spring(preset.stiffness, preset.damping, preset.mass, initial)
@@ -1287,7 +1301,7 @@ export class TargetRuntime {
         }
       }
       if (this.drawnX === this.drawnX) {
-        this.element.style.transform = ""
+        this.element.style.transform = this.owned.transform
         this.drawnX = NaN
       }
       return
@@ -1325,7 +1339,7 @@ export class TargetRuntime {
       if (sx !== 1 || sy !== 1) {
         transform += ` scale3d(${sx.toFixed(3)}, ${sy.toFixed(3)}, 1)`
       }
-      this.element.style.transform = transform
+      this.element.style.transform = this.owned.transform ? `${transform} ${this.owned.transform}` : transform
     }
   }
 
@@ -1352,15 +1366,16 @@ export class TargetRuntime {
   }
 
   destroy(): void {
-    this.element.style.transform = ""
-    this.element.style.offsetPath = ""
-    this.element.style.offsetDistance = ""
-    this.element.style.offsetRotate = ""
+    this.element.style.transform = this.owned.transform
+    this.element.style.transformOrigin = this.owned.transformOrigin
+    this.element.style.offsetPath = this.owned.offsetPath
+    this.element.style.offsetDistance = this.owned.offsetDistance
+    this.element.style.offsetRotate = this.owned.offsetRotate
   }
 }
 
 export function shouldReduceMotion(config: TargetConfig, systemReduce: boolean): boolean {
   if (config.reducedMotion === "ignore") return false
-  if (config.reducedMotion === "reduce") return true
+  if (config.reducedMotion === "none" || config.reducedMotion === "reduce") return true
   return systemReduce
 }

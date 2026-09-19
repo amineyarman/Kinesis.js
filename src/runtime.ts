@@ -158,6 +158,10 @@ export interface KinesisApp {
   destroy(): void
 }
 
+export interface CreateKinesisOptions {
+  signal?: AbortSignal
+}
+
 const PROPERTY_MAP: Record<string, string> = {
   tilt: "--k-tilt",
   parallax: "--k-parallax",
@@ -597,9 +601,21 @@ class ScopeRuntime implements KinesisScope {
     grabX: 0,
     grabY: 0,
   }
+  private ownedRoot = { perspective: "", transformStyle: "", transform: "" }
+  private sceneOwned: { node: HTMLElement; transform: string; transformStyle: string } | undefined
+  private depthMarks: Array<{ node: HTMLElement | SVGElement; transformStyle: string }> = []
+  private depthMarked = new Set<Element>()
+  private resizeObserver: ResizeObserver | undefined
+  private watched = new Set<Element>()
+  private everConnected = false
 
   constructor(root: HTMLElement) {
     this.root = root
+    this.ownedRoot = {
+      perspective: root.style.perspective,
+      transformStyle: root.style.transformStyle,
+      transform: root.style.transform,
+    }
     const nx = new KSignal(() => this.pointerState.nx)
     const ny = new KSignal(() => this.pointerState.ny)
     const clientX = new KSignal(() => this.pointerState.x)
@@ -726,20 +742,44 @@ class ScopeRuntime implements KinesisScope {
     kernel.add(this)
     this.unbind.push(() => kernel.remove(this))
     if (typeof ResizeObserver !== "undefined") {
-      const resizeObserver = new ResizeObserver(() => {
+      this.resizeObserver = new ResizeObserver(() => {
         this.layoutDirty = true
         this.kick()
       })
-      resizeObserver.observe(this.root)
-      this.unbind.push(() => resizeObserver.disconnect())
+      this.watchBox(this.root)
+      this.unbind.push(() => {
+        this.resizeObserver?.disconnect()
+        this.watched.clear()
+      })
     }
 
-    const observer = new MutationObserver(() => this.invalidate())
+    const retune = (event: Event) => {
+      if (event instanceof PointerEvent || event instanceof FocusEvent) {
+        this.retuneNode(event.relatedTarget)
+      }
+      this.retuneNode(event.target)
+    }
+    this.root.addEventListener("pointerover", retune, { passive: true })
+    this.root.addEventListener("focusin", retune)
+    this.root.addEventListener("focusout", retune)
+    this.unbind.push(() => {
+      this.root.removeEventListener("pointerover", retune)
+      this.root.removeEventListener("focusin", retune)
+      this.root.removeEventListener("focusout", retune)
+    })
+
+    const observer = new MutationObserver(() => {
+      if (!this.root.isConnected) {
+        this.destroy()
+        return
+      }
+      this.invalidate()
+    })
     observer.observe(this.root, {
       subtree: true,
       childList: true,
       attributes: true,
-      attributeFilter: ["class", "data-kinesis"],
+      attributeFilter: ["class", "data-kinesis", "data-k-scene", "data-k-group", "hidden"],
     })
     this.unbind.push(() => observer.disconnect())
 
@@ -755,7 +795,13 @@ class ScopeRuntime implements KinesisScope {
   }
 
   canWake(): boolean {
-    return !this.destroyed && !this.paused && this.visible && !kernel.hidden
+    if (this.destroyed || this.paused || !this.visible || kernel.hidden) return false
+    if (this.root.isConnected) {
+      this.everConnected = true
+      return true
+    }
+    if (this.everConnected) this.destroy()
+    return false
   }
 
   rewindClock(): void {
@@ -1062,6 +1108,7 @@ class ScopeRuntime implements KinesisScope {
     this.fieldCount = fields
     this.maxFieldRadius = radius
     this.hashDirty = true
+    this.syncWatched()
   }
 
   private readScopeConfig(): TargetConfig {
@@ -1105,6 +1152,9 @@ class ScopeRuntime implements KinesisScope {
   }
 
   private applyScopeFrame(): void {
+    this.restoreDepthMarks()
+    if (this.sceneOwned && this.sceneOwned.node !== this.sceneNode()) this.restoreScene()
+    this.captureScene()
     this.root.style.transformStyle = "flat"
     this.root.style.perspective = this.threeD && this.perspectiveCss ? this.perspectiveCss : ""
     if (this.threeD) {
@@ -1123,10 +1173,72 @@ class ScopeRuntime implements KinesisScope {
     let node: Element | null = from
     while (node && node !== this.root) {
       if (node instanceof HTMLElement || node instanceof SVGElement) {
+        if (!this.depthMarked.has(node)) {
+          this.depthMarked.add(node)
+          this.depthMarks.push({ node, transformStyle: node.style.transformStyle })
+        }
         node.style.setProperty("transform-style", "preserve-3d")
       }
       node = node.parentElement
     }
+  }
+
+  private captureScene(): void {
+    const scene = this.sceneNode()
+    if (scene === this.root || this.sceneOwned?.node === scene) return
+    this.sceneOwned = {
+      node: scene,
+      transform: scene.style.transform,
+      transformStyle: scene.style.transformStyle,
+    }
+  }
+
+  private restoreScene(): void {
+    if (!this.sceneOwned) return
+    const { node, transform, transformStyle } = this.sceneOwned
+    node.style.transform = transform
+    node.style.transformStyle = transformStyle
+    this.sceneOwned = undefined
+    this.lastSceneTransform = ""
+  }
+
+  private restoreDepthMarks(): void {
+    this.depthMarks.forEach((entry) => {
+      entry.node.style.transformStyle = entry.transformStyle
+    })
+    this.depthMarks = []
+    this.depthMarked.clear()
+  }
+
+  private watchBox(node: Element): void {
+    if (this.watched.has(node)) return
+    this.resizeObserver?.observe(node)
+    this.watched.add(node)
+  }
+
+  private unwatchBox(node: Element): void {
+    if (node === this.root) return
+    this.resizeObserver?.unobserve(node)
+    this.watched.delete(node)
+  }
+
+  private syncWatched(): void {
+    if (!this.resizeObserver) return
+    const keep = new Set<Element>([this.root])
+    this.targets.forEach((_, node) => keep.add(node))
+    this.parentEls.forEach((node) => keep.add(node))
+    this.named.forEach((entry) => keep.add(entry.el))
+    this.watched.forEach((node) => {
+      if (!keep.has(node)) this.unwatchBox(node)
+    })
+    keep.forEach((node) => this.watchBox(node))
+  }
+
+  private retuneNode(node: EventTarget | null): void {
+    if (!(node instanceof HTMLElement) || node === this.root || !this.owns(node)) return
+    const target = this.targets.get(node)
+    if (!target) return
+    target.refresh(parseTargetConfig(getComputedStyle(node)))
   }
 
   private hasDepthScene(): boolean {
@@ -1426,9 +1538,11 @@ class ScopeRuntime implements KinesisScope {
   }
 
   dropTarget(element: HTMLElement): void {
+    this.unwatchBox(element)
     this.targets.get(element)?.destroy()
     this.targets.delete(element)
     this.rememberSources()
+    this.kick()
   }
 
   ensureTarget(element: HTMLElement): TargetRuntime {
@@ -1437,6 +1551,7 @@ class ScopeRuntime implements KinesisScope {
     const config = parseTargetConfig(getComputedStyle(element))
     const target = new TargetRuntime(element, config)
     this.targets.set(element, target)
+    this.watchBox(element)
     this.rememberSources()
     return target
   }
@@ -1872,6 +1987,7 @@ class ScopeRuntime implements KinesisScope {
   }
 
   destroy(): void {
+    if (this.destroyed) return
     this.destroyed = true
     this.paused = true
     if (this.drag.target) {
@@ -1883,22 +1999,43 @@ class ScopeRuntime implements KinesisScope {
       this.drag.target.dragLive = false
       this.drag.target = null
     }
+    this.drag.live = false
+    this.drag.armed = false
+    this.drag.pointerId = -1
     kernel.remove(this)
     this.unbind.forEach((fn) => fn())
+    this.unbind = []
     this.targets.forEach((target) => target.destroy())
     this.targets.clear()
-    this.root.style.perspective = ""
-    this.root.style.transformStyle = ""
-    this.root.style.transform = ""
-    const scene = this.root.querySelector<HTMLElement>("[data-k-scene]")
-    if (scene) {
-      scene.style.transform = ""
-      scene.style.transformStyle = ""
-    }
+    this.restoreDepthMarks()
+    this.restoreScene()
+    this.root.style.perspective = this.ownedRoot.perspective
+    this.root.style.transformStyle = this.ownedRoot.transformStyle
+    this.root.style.transform = this.ownedRoot.transform
+    this.lastSceneTransform = ""
+    this.list.length = 0
+    this.named.clear()
+    this.parents.clear()
+    this.parentEls.clear()
+    this.chains = []
+    this.hash.clear()
+    this.pointerLog = []
+    this.logStart = 0
+    this.watched.clear()
     this.audios.forEach((item) => item.destroy())
     this.audios = []
     this.videos.forEach((item) => item.destroy())
     this.videos = []
+  }
+
+  bindSignal(signal: AbortSignal): void {
+    const abort = () => this.destroy()
+    if (signal.aborted) {
+      this.destroy()
+      return
+    }
+    signal.addEventListener("abort", abort)
+    this.unbind.push(() => signal.removeEventListener("abort", abort))
   }
 }
 
@@ -1908,35 +2045,50 @@ export function getKinesis(): KinesisApp | undefined {
   return app
 }
 
-export function createKinesis(root: string | HTMLElement): KinesisScope {
+export function createKinesis(root: string | HTMLElement, options?: CreateKinesisOptions): KinesisScope {
   if (typeof window === "undefined") {
     throw new Error("createKinesis requires a browser environment")
   }
   const element = typeof root === "string" ? document.querySelector<HTMLElement>(root) : root
   if (!element) throw new Error("Kinesis scope root not found")
   if (!element.hasAttribute("data-kinesis")) element.setAttribute("data-kinesis", "")
+  const existing = kernel.byRoot.get(element)
+  if (existing) return existing
   registerCssProperties()
-  return new ScopeRuntime(element)
+  const scope = new ScopeRuntime(element)
+  if (options?.signal) scope.bindSignal(options.signal)
+  return scope
 }
 
-export function initKinesis(root: ParentNode = document): KinesisApp {
+export function initKinesis(root?: ParentNode, options?: CreateKinesisOptions): KinesisApp {
   if (typeof window === "undefined") {
     return { scopes: [], refresh() {}, destroy() {} }
   }
   if (app) app.destroy()
   registerCssProperties()
-  const nodes = Array.from(root.querySelectorAll<HTMLElement>("[data-kinesis]"))
-  const scopes = nodes.map((node) => new ScopeRuntime(node))
-  app = {
+  const scopeRoot = root ?? document
+  const nodes = Array.from(scopeRoot.querySelectorAll<HTMLElement>("[data-kinesis]"))
+  const scopes = nodes.map((node) => {
+    kernel.byRoot.get(node)?.destroy()
+    return new ScopeRuntime(node)
+  })
+  const next: KinesisApp = {
     scopes,
     refresh() {
       scopes.forEach((scope) => scope.refresh())
     },
     destroy() {
       scopes.forEach((scope) => scope.destroy())
+      if (app === next) app = undefined
     },
   }
-  return app
+  app = next
+  if (options?.signal) {
+    const abort = () => next.destroy()
+    if (options.signal.aborted) abort()
+    else options.signal.addEventListener("abort", abort, { once: true })
+  }
+  return next
 }
 
 export type { TargetConfig }

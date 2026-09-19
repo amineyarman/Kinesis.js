@@ -126,7 +126,11 @@ function hostsOf(root: ParentNode): HTMLElement[] {
   return Array.from(seen)
 }
 
-export function bindText(root: ParentNode | { root: HTMLElement; refresh?(): void } = document): TextBinding {
+export function bindText(root?: ParentNode | { root: HTMLElement; refresh?(): void }): TextBinding {
+  if (typeof document === "undefined") {
+    return { refresh() {}, destroy() {} }
+  }
+  root = root ?? document
   const node = "root" in root ? root.root : root
   const refreshScene = "refresh" in root ? root.refresh : undefined
   const observed = new Map<HTMLElement, ResizeObserver>()

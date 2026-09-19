@@ -38,7 +38,8 @@
     "dev": "vite",
     "build": "vite build && tsc",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "bench": "vitest bench --run"
   },
   "devDependencies": {
     "@types/node": "^22.5.5",

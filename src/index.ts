@@ -2,6 +2,7 @@ export { initKinesis, createKinesis, getKinesis } from "./runtime"
 export type {
   KinesisApp,
   KinesisScope,
+  CreateKinesisOptions,
   MotionHandle,
   PointerSignals,
   OrientationSignals,

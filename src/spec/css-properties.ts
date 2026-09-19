@@ -109,9 +109,9 @@ export const cssProperties: CssPropertySpec[] = [
   {
     name: "--k-reduced-motion",
     title: "Reduced motion",
-    description: "How Kinesis responds to the user's motion preference.",
-    syntax: "respect | ignore | reduce",
-    values: "respect | ignore | reduce",
+    description: "respect follows prefers-reduced-motion. reduce and none still decorative motion. ignore opts out. Drag stays usable.",
+    syntax: "respect | reduce | none | ignore",
+    values: "respect | reduce | none | ignore",
     defaultValue: "respect",
     inherits: true,
     category: "context",
