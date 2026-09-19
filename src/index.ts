@@ -49,6 +49,9 @@ export {
   registryLane,
   publicShipInteractions,
   registryByLane,
+  responseChannels,
+  responseChannelMap,
+  getResponseChannel,
 } from "./spec"
 export type {
   CssPropertySpec,
@@ -61,4 +64,9 @@ export type {
   RegistryEntry,
   RegistryLane,
   RegistryOwner,
+  ResponseChannel,
+  ResponseCost,
+  ResponseDomain,
 } from "./spec"
+export { parseColor, lerpColor, serializeColor, composeFilter, rgbToOklab } from "./color"
+export type { Color } from "./color"

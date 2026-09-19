@@ -564,6 +564,7 @@ export const kinesisRegistry: RegistryEntry[] = [
     description: "Primary compositor output domain.",
     owner: "response",
     ready: true,
+    docsPath: "/docs/concepts/responses/",
   }),
   item({
     id: "opacity",
@@ -574,6 +575,7 @@ export const kinesisRegistry: RegistryEntry[] = [
     description: "Class A appearance channel.",
     owner: "response",
     ready: true,
+    docsPath: "/docs/concepts/responses/",
   }),
   item({
     id: "color",
@@ -583,7 +585,8 @@ export const kinesisRegistry: RegistryEntry[] = [
     publicPrimitive: false,
     description: "Typed interpolated color. No per-frame parsing.",
     owner: "response",
-    ready: false,
+    ready: true,
+    docsPath: "/docs/concepts/responses/",
   }),
   item({
     id: "filter",
@@ -593,7 +596,19 @@ export const kinesisRegistry: RegistryEntry[] = [
     publicPrimitive: false,
     description: "Cost-controlled filter writes.",
     owner: "response",
-    ready: false,
+    ready: true,
+    docsPath: "/docs/concepts/responses/",
+  }),
+  item({
+    id: "custom",
+    title: "Custom property",
+    kind: "response",
+    status: "FOUNDATION",
+    publicPrimitive: false,
+    description: "Numeric CSS variable output from bind().",
+    owner: "response",
+    ready: true,
+    docsPath: "/docs/concepts/responses/",
   }),
   item({
     id: "shadow",

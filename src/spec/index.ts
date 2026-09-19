@@ -23,3 +23,5 @@ export {
   publicShipInteractions,
   registryByLane,
 } from "./registry"
+export { responseChannels, responseChannelMap, getResponseChannel } from "./responses"
+export type { ResponseChannel, ResponseCost, ResponseDomain } from "./responses"

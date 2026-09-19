@@ -1,7 +1,11 @@
 import { bench, describe } from "vitest"
+import { lerpColor, parseColor } from "../color"
 import { constrainDrag } from "../drag"
 import { computeOutput, createComputeContext, defaults } from "../effects"
 import { SpatialHash } from "../field"
+
+const ink = parseColor("#111111")!
+const accent = parseColor("#2f6bff")!
 
 const config = {
   ...defaults,
@@ -32,6 +36,9 @@ describe("compositor", () => {
   })
   bench("drag constraint", () => {
     constrainDrag(48, 36, rect, { left: 0, top: 0, width: 400, height: 300 }, 16, "both")
+  })
+  bench("color mix", () => {
+    lerpColor(ink, accent, 0.4)
   })
   bench("spatial hash 500", () => {
     const hash = new SpatialHash()

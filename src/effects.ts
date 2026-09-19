@@ -16,6 +16,7 @@ import { computeEdge } from "./edge"
 import { parseDrag } from "./drag"
 import { getMotionPreset } from "./spec/motion-presets"
 import type { KSignal } from "./signal"
+import { composeFilter, lerpColor, parseColor, serializeColor, type Color } from "./color"
 
 export interface TargetConfig {
   enabled: boolean
@@ -112,6 +113,10 @@ export interface TargetConfig {
   dragSnap: number
   dragInertia: number
   dragThreshold: number
+  colorFrom: string
+  colorTo: string
+  backgroundFrom: string
+  backgroundTo: string
 }
 
 export interface GroupConfig {
@@ -146,6 +151,13 @@ export interface MotionOutput {
   scaleX: number
   scaleY: number
   path: number
+  opacity: number
+  blur: number
+  brightness: number
+  contrast: number
+  saturate: number
+  color: number
+  background: number
 }
 
 export interface ComputeContext {
@@ -285,6 +297,10 @@ export const defaults: TargetConfig = {
   dragSnap: 0,
   dragInertia: 1,
   dragThreshold: 6,
+  colorFrom: "",
+  colorTo: "",
+  backgroundFrom: "",
+  backgroundTo: "",
 }
 
 function read(style: CSSStyleDeclaration, name: string): string {
@@ -589,7 +605,15 @@ export function parseTargetConfig(style: CSSStyleDeclaration): TargetConfig {
     dragSnap: optionalPx(read(style, "--k-drag-snap")),
     dragInertia: Number.parseFloat(read(style, "--k-drag-inertia") || "1") || 0,
     dragThreshold: optionalPx(read(style, "--k-drag-threshold")) || 6,
+    colorFrom: colorStop(read(style, "--k-color-from")),
+    colorTo: colorStop(read(style, "--k-color-to")),
+    backgroundFrom: colorStop(read(style, "--k-background-from")),
+    backgroundTo: colorStop(read(style, "--k-background-to")),
   }
+}
+
+function colorStop(value: string): string {
+  return !value || value === "none" ? "" : value
 }
 
 export function isMotionTarget(config: TargetConfig): boolean {
@@ -660,7 +684,38 @@ export const CHANNELS: (keyof MotionOutput)[] = [
   "scaleX",
   "scaleY",
   "path",
+  "opacity",
+  "blur",
+  "brightness",
+  "contrast",
+  "saturate",
+  "color",
+  "background",
 ]
+
+const APPEARANCE = new Set<keyof MotionOutput>([
+  "opacity",
+  "blur",
+  "brightness",
+  "contrast",
+  "saturate",
+  "color",
+  "background",
+])
+
+export function channelRest(key: keyof MotionOutput): number {
+  if (
+    key === "scaleX" ||
+    key === "scaleY" ||
+    key === "opacity" ||
+    key === "brightness" ||
+    key === "contrast" ||
+    key === "saturate"
+  ) {
+    return 1
+  }
+  return 0
+}
 
 export function restOutput(into?: MotionOutput): MotionOutput {
   const output = into ?? {
@@ -673,6 +728,13 @@ export function restOutput(into?: MotionOutput): MotionOutput {
     scaleX: 1,
     scaleY: 1,
     path: 0,
+    opacity: 1,
+    blur: 0,
+    brightness: 1,
+    contrast: 1,
+    saturate: 1,
+    color: 0,
+    background: 0,
   }
   output.x = 0
   output.y = 0
@@ -683,6 +745,13 @@ export function restOutput(into?: MotionOutput): MotionOutput {
   output.scaleX = 1
   output.scaleY = 1
   output.path = 0
+  output.opacity = 1
+  output.blur = 0
+  output.brightness = 1
+  output.contrast = 1
+  output.saturate = 1
+  output.color = 0
+  output.background = 0
   return output
 }
 
@@ -1086,6 +1155,7 @@ export class TargetRuntime {
   readonly element: HTMLElement
   config: TargetConfig
   bindings: Partial<Record<keyof MotionOutput, KSignal>> = {}
+  varBindings: Record<string, KSignal> = {}
   paused = false
   rect: LayoutBox | undefined
   busy = false
@@ -1115,6 +1185,13 @@ export class TargetRuntime {
     scaleX: false,
     scaleY: false,
     path: false,
+    opacity: false,
+    blur: false,
+    brightness: false,
+    contrast: false,
+    saturate: false,
+    color: false,
+    background: false,
   }
   private lastOrigin = ""
   private lastOffsetPath = ""
@@ -1136,7 +1213,21 @@ export class TargetRuntime {
     offsetPath: "",
     offsetDistance: "",
     offsetRotate: "",
+    opacity: "",
+    color: "",
+    backgroundColor: "",
+    filter: "",
   }
+  private colorFrom: Color | null = null
+  private colorTo: Color | null = null
+  private backgroundFrom: Color | null = null
+  private backgroundTo: Color | null = null
+  private drawnOpacity = NaN
+  private drawnColor = ""
+  private drawnBackground = ""
+  private drawnFilter = ""
+  private drawnVars = new Map<string, string>()
+  private ownedVars = new Map<string, string>()
 
   constructor(element: HTMLElement, config: TargetConfig) {
     this.element = element
@@ -1146,21 +1237,20 @@ export class TargetRuntime {
       offsetPath: element.style.offsetPath,
       offsetDistance: element.style.offsetDistance,
       offsetRotate: element.style.offsetRotate,
+      opacity: element.style.opacity,
+      color: element.style.color,
+      backgroundColor: element.style.backgroundColor,
+      filter: element.style.filter,
     }
     this.config = config
     const preset = motionPreset(config)
     const make = (initial = 0) => new Spring(preset.stiffness, preset.damping, preset.mass, initial)
-    this.springs = {
-      x: make(),
-      y: make(),
-      z: make(),
-      rotateX: make(),
-      rotateY: make(),
-      rotateZ: make(),
-      scaleX: make(1),
-      scaleY: make(1),
-      path: make(),
+    this.springs = {} as Record<keyof MotionOutput, Spring>
+    for (let index = 0; index < CHANNELS.length; index += 1) {
+      const key = CHANNELS[index]!
+      this.springs[key] = make(channelRest(key))
     }
+    this.tuneColors()
     this.syncDrive()
   }
 
@@ -1170,7 +1260,27 @@ export class TargetRuntime {
     for (let index = 0; index < CHANNELS.length; index += 1) {
       this.springs[CHANNELS[index]!].setPreset(preset.stiffness, preset.damping, preset.mass)
     }
+    this.tuneColors()
     this.syncDrive()
+  }
+
+  keepsAlive(): boolean {
+    return this.bound || Object.keys(this.varBindings).length > 0
+  }
+
+  private tuneColors(): void {
+    this.colorFrom = parseColor(this.config.colorFrom)
+    this.colorTo = parseColor(this.config.colorTo)
+    if (!this.colorFrom && this.colorTo) {
+      this.colorFrom =
+        parseColor(this.owned.color) ?? parseColor(getComputedStyle(this.element).color)
+    }
+    this.backgroundFrom = parseColor(this.config.backgroundFrom)
+    this.backgroundTo = parseColor(this.config.backgroundTo)
+    if (!this.backgroundFrom && this.backgroundTo) {
+      this.backgroundFrom =
+        parseColor(this.owned.backgroundColor) ?? parseColor(getComputedStyle(this.element).backgroundColor)
+    }
   }
 
   syncDrive(): void {
@@ -1180,7 +1290,7 @@ export class TargetRuntime {
     const pull = config.magneticRadius > 0 || config.attract !== 0 || config.repel !== 0
     const field = pull || config.vortex !== 0 || config.wind !== 0 || config.ripple !== 0 || config.lensOn || config.bend !== 0
     const shift = pull || follow || config.trail || config.scrollX || config.orbit || config.vortex || config.wind || config.tether || config.wave || config.ripple || config.bend || config.chain || config.wake || config.edge || config.drag
-    this.bound = CHANNELS.some((key) => !!this.bindings[key])
+    this.bound = CHANNELS.some((key) => !!this.bindings[key]) || Object.keys(this.varBindings).length > 0
     this.drive.x = !!(config.parallaxX || shift || this.bindings.x)
     this.drive.y = !!(config.parallaxY || shift || this.bindings.y)
     this.drive.z = !!(config.depth || this.bindings.z)
@@ -1190,6 +1300,13 @@ export class TargetRuntime {
     this.drive.scaleX = !!((audio && config.audioBin < 0) || config.lensOn || this.bindings.scaleX)
     this.drive.scaleY = !!(audio || config.lensOn || this.bindings.scaleY)
     this.drive.path = !!(config.path || this.bindings.path)
+    this.drive.opacity = !!this.bindings.opacity
+    this.drive.blur = !!this.bindings.blur
+    this.drive.brightness = !!this.bindings.brightness
+    this.drive.contrast = !!this.bindings.contrast
+    this.drive.saturate = !!this.bindings.saturate
+    this.drive.color = !!(this.bindings.color && this.colorFrom && this.colorTo)
+    this.drive.background = !!(this.bindings.background && this.backgroundFrom && this.backgroundTo)
     this.usesAudio = audio
     this.usesPath = !!config.path
     this.usesAnchor = usesNamedAnchor(config)
@@ -1248,15 +1365,23 @@ export class TargetRuntime {
         const signal = this.bindings[key]
         if (!signal) continue
         signal.step(dt)
-        if (key === "path") output.path = signal.value
+        if (key === "path" || APPEARANCE.has(key)) output[key] = signal.value
         else output[key] += signal.value
       }
+    }
+    const names = Object.keys(this.varBindings)
+    for (let index = 0; index < names.length; index += 1) {
+      const signal = this.varBindings[names[index]!]
+      if (!signal) continue
+      const before = signal.value
+      signal.step(dt)
+      if (signal.value !== before) active = true
     }
     const instant = this.config.motion === "instant" || reduceMotion || snap || this.dragLive
     for (let index = 0; index < CHANNELS.length; index += 1) {
       const key = CHANNELS[index]!
       const spring = this.springs[key]
-      const rest = key === "scaleX" || key === "scaleY" ? 1 : 0
+      const rest = channelRest(key)
       spring.target = reduceMotion || !this.drive[key] ? rest : output[key]
       if (instant) {
         spring.value = spring.target
@@ -1304,6 +1429,7 @@ export class TargetRuntime {
         this.element.style.transform = this.owned.transform
         this.drawnX = NaN
       }
+      this.commitAppearance()
       return
     }
     const x = this.springs.x.value
@@ -1341,6 +1467,54 @@ export class TargetRuntime {
       }
       this.element.style.transform = this.owned.transform ? `${transform} ${this.owned.transform}` : transform
     }
+    this.commitAppearance()
+  }
+
+  private commitAppearance(): void {
+    if (this.drive.opacity) {
+      const next = clamp(this.springs.opacity.value, 0, 1)
+      if (next !== this.drawnOpacity) {
+        this.element.style.opacity = next.toFixed(3)
+        this.drawnOpacity = next
+      }
+    }
+    if (this.drive.blur || this.drive.brightness || this.drive.contrast || this.drive.saturate) {
+      const filter = composeFilter(
+        this.springs.blur.value,
+        this.springs.brightness.value,
+        this.springs.contrast.value,
+        this.springs.saturate.value,
+      )
+      if (filter !== this.drawnFilter) {
+        this.element.style.filter = filter || this.owned.filter
+        this.drawnFilter = filter
+      }
+    }
+    if (this.drive.color && this.colorFrom && this.colorTo) {
+      const css = serializeColor(lerpColor(this.colorFrom, this.colorTo, this.springs.color.value))
+      if (css !== this.drawnColor) {
+        this.element.style.color = css
+        this.drawnColor = css
+      }
+    }
+    if (this.drive.background && this.backgroundFrom && this.backgroundTo) {
+      const css = serializeColor(lerpColor(this.backgroundFrom, this.backgroundTo, this.springs.background.value))
+      if (css !== this.drawnBackground) {
+        this.element.style.backgroundColor = css
+        this.drawnBackground = css
+      }
+    }
+    const names = Object.keys(this.varBindings)
+    for (let index = 0; index < names.length; index += 1) {
+      const name = names[index]!
+      const signal = this.varBindings[name]
+      if (!signal) continue
+      if (!this.ownedVars.has(name)) this.ownedVars.set(name, this.element.style.getPropertyValue(name))
+      const text = Number.isFinite(signal.value) ? signal.value.toFixed(3) : ""
+      if (this.drawnVars.get(name) === text) continue
+      this.element.style.setProperty(name, text)
+      this.drawnVars.set(name, text)
+    }
   }
 
   pin(x: number, y: number): void {
@@ -1371,6 +1545,14 @@ export class TargetRuntime {
     this.element.style.offsetPath = this.owned.offsetPath
     this.element.style.offsetDistance = this.owned.offsetDistance
     this.element.style.offsetRotate = this.owned.offsetRotate
+    this.element.style.opacity = this.owned.opacity
+    this.element.style.color = this.owned.color
+    this.element.style.backgroundColor = this.owned.backgroundColor
+    this.element.style.filter = this.owned.filter
+    this.ownedVars.forEach((value, name) => {
+      if (value) this.element.style.setProperty(name, value)
+      else this.element.style.removeProperty(name)
+    })
   }
 }
 

@@ -19,6 +19,7 @@ export type PropertyCategory =
   | "edge"
   | "text"
   | "drag"
+  | "response"
 export type PreviewKind =
   | "source"
   | "motion"

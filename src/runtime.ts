@@ -33,7 +33,7 @@ export interface MotionHandle {
   set(values: Record<string, string | number | number[]>): this
   to(values: Record<string, string | number | number[]>, options?: { motion?: string }): Promise<this>
   reset(names?: string | string[]): this
-  bind(bindings: Partial<Record<keyof MotionOutput, KSignal>>): this
+  bind(bindings: Partial<Record<keyof MotionOutput, KSignal>> & Record<string, KSignal>): this
   parallax(value: { x?: number; y?: number }): this
   tilt(value: { x?: number; y?: number }): this
   magnetic(value: { radius?: number; force?: number }): this
@@ -211,6 +211,10 @@ const PROPERTY_MAP: Record<string, string> = {
   dragSnap: "--k-drag-snap",
   dragInertia: "--k-drag-inertia",
   dragThreshold: "--k-drag-threshold",
+  colorFrom: "--k-color-from",
+  colorTo: "--k-color-to",
+  backgroundFrom: "--k-background-from",
+  backgroundTo: "--k-background-to",
   wave: "--k-wave",
   ripple: "--k-ripple",
   lensScale: "--k-lens-scale",
@@ -276,7 +280,11 @@ function createHandle(element: HTMLElement, runtime: ScopeRuntime): MotionHandle
     },
     bind(bindings) {
       const target = runtime.ensureTarget(element)
-      target.bindings = { ...target.bindings, ...bindings }
+      Object.entries(bindings).forEach(([key, signal]) => {
+        if (!signal) return
+        if (key.startsWith("--")) target.varBindings[key] = signal
+        else target.bindings[key as keyof MotionOutput] = signal
+      })
       target.syncDrive()
       runtime.resume()
       return this
@@ -1353,11 +1361,15 @@ class ScopeRuntime implements KinesisScope {
       if (group.kind) groups.push({ node, group })
       if (node === this.root) return
       const config = parseTargetConfig(style)
+      const existing = this.targets.get(node)
+      if (existing) {
+        existing.refresh(config)
+        if (isMotionTarget(config) || existing.keepsAlive()) seen.add(node)
+        return
+      }
       if (!isMotionTarget(config)) return
       seen.add(node)
-      const existing = this.targets.get(node)
-      if (existing) existing.refresh(config)
-      else this.targets.set(node, new TargetRuntime(node, config))
+      this.targets.set(node, new TargetRuntime(node, config))
     })
     this.chains = []
     groups.forEach((entry) => {
