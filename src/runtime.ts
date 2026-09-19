@@ -723,6 +723,7 @@ class ScopeRuntime implements KinesisScope {
     })
     this.named.forEach((entry) => this.nudgeBox(entry.box, dx, dy))
     this.parents.forEach((box) => this.nudgeBox(box, dx, dy))
+      this.hashDirty = true
     }
     this.measuredScrollX = x
     this.measuredScrollY = y
@@ -1034,7 +1035,7 @@ class ScopeRuntime implements KinesisScope {
       ctx.sceneY = this.rootRect.top + this.rootRect.height / 2
     }
     ctx.pointerLive = this.pointerInside || this.windowPointer
-    const useHash = this.fieldCount > 0 && this.list.length >= 32
+    const useHash = this.fieldCount > 0 && this.list.length >= 150
     if (useHash && this.hashDirty) this.rebuildHash()
     if (useHash) {
       this.queryGen += 1
@@ -1413,7 +1414,7 @@ class ScopeRuntime implements KinesisScope {
       return
     }
     const named = this.named.get(name)
-    if (named?.box.width || named?.box.height) {
+    if (named) {
       ctx.anchorX = named.box.left + named.box.width / 2
       ctx.anchorY = named.box.top + named.box.height / 2
       ctx.shape = SHAPE_ELEMENT

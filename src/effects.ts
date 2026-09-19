@@ -388,6 +388,8 @@ export function parseTargetConfig(style: CSSStyleDeclaration): TargetConfig {
   const lensScaleRaw = read(style, "--k-lens-scale")
   const lensRadiusRaw = read(style, "--k-lens-radius")
   const anchorName = read(style, "--k-anchor-name")
+  const groupKind = read(style, "--k-group")
+  const grouped = Boolean(groupKind && groupKind !== "none")
 
   return {
     enabled: read(style, "--k-enabled") !== "0",
@@ -433,10 +435,10 @@ export function parseTargetConfig(style: CSSStyleDeclaration): TargetConfig {
     smoothing: Number.parseFloat(read(style, "--k-smoothing") || "0") || 0,
     anchor: read(style, "--k-anchor") || "pointer",
     anchorName: anchorName && anchorName !== "none" ? anchorName : "",
-    face: optionalDeg(read(style, "--k-face")),
+    face: grouped ? 0 : optionalDeg(read(style, "--k-face")),
     faceAxis: read(style, "--k-face-axis") || "both",
     faceInvert: read(style, "--k-face-invert") === "1",
-    orbit: optionalPx(read(style, "--k-orbit")),
+    orbit: grouped ? 0 : optionalPx(read(style, "--k-orbit")),
     orbitSpeed: Number.parseFloat(read(style, "--k-orbit-speed") || "0.25") || 0.25,
     orbitDirection: winding(read(style, "--k-orbit-direction") || "clockwise"),
     orbitMode: read(style, "--k-orbit-mode") || "time",
@@ -459,17 +461,17 @@ export function parseTargetConfig(style: CSSStyleDeclaration): TargetConfig {
     groupOrder: "",
     groupIndex: 0,
     groupCount: 0,
-    wave: optionalPx(read(style, "--k-wave")),
+    wave: grouped ? 0 : optionalPx(read(style, "--k-wave")),
     waveAxis: read(style, "--k-wave-axis") || "y",
     waveSpread: Number.parseFloat(read(style, "--k-wave-spread") || "0.18") || 0.18,
     waveRadius: lengthToPx(read(style, "--k-wave-radius") || "160px"),
-    ripple: optionalPx(read(style, "--k-ripple")),
+    ripple: grouped ? 0 : optionalPx(read(style, "--k-ripple")),
     rippleRadius: lengthToPx(read(style, "--k-ripple-radius") || "180px"),
     rippleFalloff: falloffId(read(style, "--k-ripple-falloff") || "smooth"),
     lensScale: lensScaleRaw && lensScaleRaw !== "none" ? Number.parseFloat(lensScaleRaw) || 1.25 : 1.25,
     lensRadius: lengthToPx(lensRadiusRaw || "120px"),
-    lensOn: Boolean(lensScaleRaw && lensScaleRaw !== "none"),
-    bend: optionalDeg(read(style, "--k-bend")),
+    lensOn: !grouped && Boolean(lensScaleRaw && lensScaleRaw !== "none"),
+    bend: grouped ? 0 : optionalDeg(read(style, "--k-bend")),
     bendRadius: lengthToPx(read(style, "--k-bend-radius") || "160px"),
   }
 }
