@@ -34,6 +34,19 @@ it("tilt follows the pointer", () => {
   expect(output.rotateX).toBe(10)
 })
 
+it("path follows view progress", () => {
+  const output = computeOutput(
+    base({ path: "M 0 0 H 100" }),
+    { x: 0, y: 0, nx: 0, ny: 0 },
+    rect,
+    0.25,
+    false,
+    0,
+    "view",
+  )
+  expect(output.path).toBe(25)
+})
+
 it("path follows scroll progress", () => {
   const output = computeOutput(
     base({ path: "M 0 0 H 100" }),

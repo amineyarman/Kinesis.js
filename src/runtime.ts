@@ -122,6 +122,7 @@ export interface OrientationSignals {
 
 export interface ViewSignals {
   progress: KSignal
+  visible: KSignal
 }
 
 export interface ProximitySignals {
@@ -947,12 +948,36 @@ class ScopeRuntime implements KinesisScope {
   }
 
   private scrollProgress(element: HTMLElement): number {
+    return this.viewProgress(element)
+  }
+
+  private pageProgress(): number {
+    return this.scrollState.progress
+  }
+
+  private viewProgress(element: HTMLElement): number {
     const rect =
       element === this.root
         ? this.rootRect ?? this.copyBox(element.getBoundingClientRect())
         : this.targets.get(element)?.rect ?? this.copyBox(element.getBoundingClientRect())
     const view = window.innerHeight || 1
     return Math.min(1, Math.max(0, 1 - rect.top / (view + rect.height)))
+  }
+
+  private viewVisible(element: HTMLElement): number {
+    const rect =
+      element === this.root
+        ? this.rootRect ?? this.copyBox(element.getBoundingClientRect())
+        : this.targets.get(element)?.rect ?? this.copyBox(element.getBoundingClientRect())
+    const view = window.innerHeight || 0
+    return rect.top < view && rect.top + rect.height > 0 ? 1 : 0
+  }
+
+  private progressFor(config: TargetConfig, element: HTMLElement): number {
+    const source = this.resolveSource(config)
+    if (source === "video") return this.videoProgress()
+    if (source === "scroll") return this.pageProgress()
+    return this.viewProgress(element)
   }
 
   private nudgeBox(rect: { left: number; top: number }, dx: number, dy: number): void {
@@ -995,10 +1020,11 @@ class ScopeRuntime implements KinesisScope {
       if (!config) return
       if (
         config.source === "scroll" ||
+        config.source === "view" ||
         config.scrollX !== 0 ||
         config.scrollY !== 0 ||
         config.scrollRotate !== 0 ||
-        (config.path && config.source === "scroll")
+        (config.path && (config.source === "scroll" || config.source === "view"))
       ) {
         scroll = true
       }
@@ -1317,7 +1343,7 @@ class ScopeRuntime implements KinesisScope {
         if (target) target.hitGen = this.queryGen
       }
     }
-    const rootProgress = this.scrollDriven ? this.scrollProgress(this.root) : 0
+    const rootProgress = this.scrollDriven ? this.pageProgress() : 0
     const count = this.list.length
     for (let index = 0; index < count; index += 1) {
       const target = this.list[index]
@@ -1361,7 +1387,7 @@ class ScopeRuntime implements KinesisScope {
         config,
         pointer,
         target.rect ?? { left: 0, top: 0, width: 0, height: 0 },
-        source === "video" ? this.videoProgress() : target.usesPath ? rootProgress : this.scrollProgress(target.element),
+        this.progressFor(config, target.element),
         reduce,
         audioLevel,
         source,
@@ -1481,7 +1507,12 @@ class ScopeRuntime implements KinesisScope {
     }
     if (source === "scroll") {
       pointer.nx = 0
-      pointer.ny = this.scrollProgress(element) * 2 - 1
+      pointer.ny = this.pageProgress() * 2 - 1
+      return pointer
+    }
+    if (source === "view") {
+      pointer.nx = 0
+      pointer.ny = this.viewProgress(element) * 2 - 1
       return pointer
     }
     if (source === "video") {
@@ -1552,7 +1583,8 @@ class ScopeRuntime implements KinesisScope {
   inView(selector: string | HTMLElement): ViewSignals {
     const element = this.locate(selector)
     return {
-      progress: new KSignal(() => this.scrollProgress(element)),
+      progress: new KSignal(() => this.viewProgress(element)),
+      visible: new KSignal(() => this.viewVisible(element)),
     }
   }
 
