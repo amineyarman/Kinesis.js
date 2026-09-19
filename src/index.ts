@@ -8,6 +8,9 @@ export type {
   OrientationSignals,
   ProximitySignals,
   ViewSignals,
+  PressSignals,
+  HoldSignals,
+  TapSignals,
   ScrollSignals,
   GroupHandle,
   FieldHandle,
@@ -32,6 +35,8 @@ export type { AudioBandName, AudioSourceInput } from "./audio"
 export { computeEdge, createEdgeSample } from "./edge"
 export type { EdgeSample } from "./edge"
 export { constrainDrag, parseDrag, resolveDragAxis } from "./drag"
+export { holdProgress, decayImpulse, resolveRelease, HOLD_DEFAULT } from "./press"
+export type { GestureRelease } from "./press"
 export type { DragBox } from "./drag"
 export { KinesisVideo } from "./video"
 export type { VideoSourceInput } from "./video"

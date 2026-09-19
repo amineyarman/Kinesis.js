@@ -381,7 +381,8 @@ export const kinesisRegistry: RegistryEntry[] = [
     publicPrimitive: false,
     description: "Temporal down state. Not a visual recipe.",
     owner: "system",
-    ready: false,
+    ready: true,
+    docsPath: "/docs/javascript/press/",
   }),
   item({
     id: "release",
@@ -391,7 +392,8 @@ export const kinesisRegistry: RegistryEntry[] = [
     publicPrimitive: false,
     description: "Temporal up transition.",
     owner: "system",
-    ready: false,
+    ready: true,
+    docsPath: "/docs/javascript/press/",
   }),
   item({
     id: "tap",
@@ -401,7 +403,8 @@ export const kinesisRegistry: RegistryEntry[] = [
     publicPrimitive: false,
     description: "Click or tap impulse.",
     owner: "system",
-    ready: false,
+    ready: true,
+    docsPath: "/docs/javascript/press/",
   }),
   item({
     id: "hold",
@@ -411,7 +414,8 @@ export const kinesisRegistry: RegistryEntry[] = [
     publicPrimitive: false,
     description: "Time-progress while pressed.",
     owner: "system",
-    ready: false,
+    ready: true,
+    docsPath: "/docs/javascript/press/",
   }),
   item({
     id: "hover",

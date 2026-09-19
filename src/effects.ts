@@ -17,6 +17,7 @@ import { parseDrag } from "./drag"
 import { getMotionPreset } from "./spec/motion-presets"
 import type { KSignal } from "./signal"
 import { composeFilter, lerpColor, parseColor, serializeColor, type Color } from "./color"
+import { decayImpulse, holdProgress } from "./press"
 
 export interface TargetConfig {
   enabled: boolean
@@ -117,6 +118,8 @@ export interface TargetConfig {
   colorTo: string
   backgroundFrom: string
   backgroundTo: string
+  press: boolean
+  hold: number
 }
 
 export interface GroupConfig {
@@ -301,6 +304,8 @@ export const defaults: TargetConfig = {
   colorTo: "",
   backgroundFrom: "",
   backgroundTo: "",
+  press: false,
+  hold: 0,
 }
 
 function read(style: CSSStyleDeclaration, name: string): string {
@@ -609,6 +614,8 @@ export function parseTargetConfig(style: CSSStyleDeclaration): TargetConfig {
     colorTo: colorStop(read(style, "--k-color-to")),
     backgroundFrom: colorStop(read(style, "--k-background-from")),
     backgroundTo: colorStop(read(style, "--k-background-to")),
+    press: read(style, "--k-press") === "1" || timeToMs(read(style, "--k-hold")) > 0,
+    hold: timeToMs(read(style, "--k-hold")),
   }
 }
 
@@ -647,7 +654,9 @@ export function isMotionTarget(config: TargetConfig): boolean {
     config.chain !== 0 ||
     config.wake !== 0 ||
     config.edge !== 0 ||
-    config.drag !== ""
+    config.drag !== "" ||
+    config.press ||
+    config.hold !== 0
   )
 }
 
@@ -1173,6 +1182,19 @@ export class TargetRuntime {
   dragX = 0
   dragY = 0
   dragLive = false
+  press = 0
+  pressX = 0
+  pressY = 0
+  holdActive = 0
+  holdStart = 0
+  holdElapsed = 0
+  holdProgress = 0
+  holdCompleted = 0
+  tapImpulse = 0
+  tapX = 0
+  tapY = 0
+  hovered = 0
+  focused = 0
   readonly scratch: MotionOutput = restOutput()
   private springs: Record<keyof MotionOutput, Spring>
   private drive: Record<keyof MotionOutput, boolean> = {
@@ -1310,7 +1332,7 @@ export class TargetRuntime {
     this.usesAudio = audio
     this.usesPath = !!config.path
     this.usesAnchor = usesNamedAnchor(config)
-    this.timeDriven = isTimeDriven(config)
+    this.timeDriven = isTimeDriven(config) || config.hold > 0 || config.press
     this.proximityOnly =
       field &&
       !this.bound &&
@@ -1531,6 +1553,29 @@ export class TargetRuntime {
     this.springs.y.target = y
     this.springs.x.velocity = vx
     this.springs.y.velocity = vy
+  }
+
+  stepTemporal(dt: number, now: number, holding: boolean, holdMs: number, dragging: boolean): boolean {
+    let active = false
+    if (dragging) {
+      this.holdActive = 0
+      this.holdElapsed = 0
+      this.holdProgress = 0
+      this.holdCompleted = 0
+    } else if (holding && holdMs > 0) {
+      this.holdElapsed = now - this.holdStart
+      this.holdProgress = holdProgress(this.holdElapsed, holdMs)
+      this.holdCompleted = this.holdProgress >= 1 ? 1 : 0
+      this.holdActive = 1
+      active = true
+    } else {
+      this.holdActive = 0
+    }
+    if (this.tapImpulse > 0) {
+      this.tapImpulse = decayImpulse(this.tapImpulse, dt)
+      if (this.tapImpulse > 0) active = true
+    }
+    return active
   }
 
   apply(output: MotionOutput, dt: number, reduceMotion: boolean): boolean {

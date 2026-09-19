@@ -24,6 +24,7 @@ import { KinesisAudio, type AudioSourceInput } from "./audio"
 import { KinesisVideo, type VideoSourceInput } from "./video"
 import { registerCssProperties } from "./register"
 import { constrainDrag, resolveDragAxis } from "./drag"
+import { HOLD_DEFAULT, resolveRelease } from "./press"
 import { clamp, Spring } from "./core"
 import { getMotionPreset } from "./spec/motion-presets"
 
@@ -47,6 +48,9 @@ export interface MotionHandle {
   vortex(value: { strength?: number; radius?: number; spin?: number; pull?: number }): this
   wind(value: { amount?: number; radius?: number }): this
   drag(value?: { axis?: string; bounds?: string; snap?: number; inertia?: number; threshold?: number }): this
+  press(): PressSignals
+  hold(value?: { duration?: number }): HoldSignals
+  tap(): TapSignals
   pause(): this
   resume(): this
   refresh(): this
@@ -125,6 +129,26 @@ export interface ViewSignals {
   visible: KSignal
 }
 
+export interface PressSignals {
+  active: KSignal
+  x: KSignal
+  y: KSignal
+  velocity: { x: KSignal; y: KSignal }
+}
+
+export interface HoldSignals {
+  active: KSignal
+  duration: KSignal
+  progress: KSignal
+  completed: KSignal
+}
+
+export interface TapSignals {
+  impulse: KSignal
+  x: KSignal
+  y: KSignal
+}
+
 export interface ProximitySignals {
   distance: KSignal
   progress: KSignal
@@ -143,6 +167,9 @@ export interface KinesisScope {
   video(source?: VideoSourceInput): KinesisVideo
   proximity(selector: string | HTMLElement): ProximitySignals
   inView(selector: string | HTMLElement): ViewSignals
+  press(selector: string | HTMLElement): PressSignals
+  hold(selector: string | HTMLElement, options?: { duration?: number }): HoldSignals
+  tap(selector: string | HTMLElement): TapSignals
   group(selector?: string | HTMLElement): GroupHandle
   field(options: FieldOptions): FieldHandle
   path(selector: string | HTMLElement, options: PathOptions): MotionHandle
@@ -215,6 +242,8 @@ const PROPERTY_MAP: Record<string, string> = {
   colorTo: "--k-color-to",
   backgroundFrom: "--k-background-from",
   backgroundTo: "--k-background-to",
+  press: "--k-press",
+  hold: "--k-hold",
   wave: "--k-wave",
   ripple: "--k-ripple",
   lensScale: "--k-lens-scale",
@@ -229,7 +258,8 @@ function formatCssValue(name: string, value: string | number | number[]): string
     return value.map((item) => `${item}px`).join(" ")
   }
   if (typeof value === "number") {
-    if (name === "--k-wake") return `${value}ms`
+    if (name === "--k-wake" || name === "--k-hold") return `${value}ms`
+    if (name === "--k-press") return String(value)
     if (/tilt|rotate|face|bend|phase/.test(name)) return `${value}deg`
     if (
       name !== "--k-wake-force" &&
@@ -377,6 +407,15 @@ function createHandle(element: HTMLElement, runtime: ScopeRuntime): MotionHandle
         ...(value.inertia != null ? { dragInertia: value.inertia } : {}),
         ...(value.threshold != null ? { dragThreshold: value.threshold } : {}),
       })
+    },
+    press() {
+      return runtime.press(element)
+    },
+    hold(value = {}) {
+      return runtime.hold(element, value)
+    },
+    tap() {
+      return runtime.tap(element)
     },
     pause() {
       runtime.ensureTarget(element).paused = true
@@ -609,6 +648,15 @@ class ScopeRuntime implements KinesisScope {
     grabX: 0,
     grabY: 0,
   }
+  private gesture = {
+    target: null as TargetRuntime | null,
+    pointerId: -1,
+    kind: "" as "" | "pointer" | "key",
+    startX: 0,
+    startY: 0,
+    startTime: 0,
+    holdMs: 0,
+  }
   private ownedRoot = { perspective: "", transformStyle: "", transform: "" }
   private sceneOwned: { node: HTMLElement; transform: string; transformStyle: string } | undefined
   private depthMarks: Array<{ node: HTMLElement | SVGElement; transformStyle: string }> = []
@@ -731,20 +779,33 @@ class ScopeRuntime implements KinesisScope {
       })
     }
 
-    const onDragDown = (event: PointerEvent) => this.beginDrag(event)
-    const onDragUp = (event: PointerEvent) => this.endDrag(event)
-    const onDragKey = (event: KeyboardEvent) => this.nudgeDrag(event)
-    this.root.addEventListener("pointerdown", onDragDown)
-    this.root.addEventListener("pointerup", onDragUp)
-    this.root.addEventListener("pointercancel", onDragUp)
-    this.root.addEventListener("lostpointercapture", onDragUp)
-    this.root.addEventListener("keydown", onDragKey)
+    const onPointerDown = (event: PointerEvent) => {
+      this.beginPress(event)
+      this.beginDrag(event)
+    }
+    const onPointerUp = (event: PointerEvent) => {
+      const live = this.drag.live
+      this.endDrag(event)
+      this.endPress(event, live)
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      this.beginKeyPress(event)
+      this.nudgeDrag(event)
+    }
+    const onKeyUp = (event: KeyboardEvent) => this.endKeyPress(event)
+    this.root.addEventListener("pointerdown", onPointerDown)
+    this.root.addEventListener("pointerup", onPointerUp)
+    this.root.addEventListener("pointercancel", onPointerUp)
+    this.root.addEventListener("lostpointercapture", onPointerUp)
+    this.root.addEventListener("keydown", onKeyDown)
+    this.root.addEventListener("keyup", onKeyUp)
     this.unbind.push(() => {
-      this.root.removeEventListener("pointerdown", onDragDown)
-      this.root.removeEventListener("pointerup", onDragUp)
-      this.root.removeEventListener("pointercancel", onDragUp)
-      this.root.removeEventListener("lostpointercapture", onDragUp)
-      this.root.removeEventListener("keydown", onDragKey)
+      this.root.removeEventListener("pointerdown", onPointerDown)
+      this.root.removeEventListener("pointerup", onPointerUp)
+      this.root.removeEventListener("pointercancel", onPointerUp)
+      this.root.removeEventListener("lostpointercapture", onPointerUp)
+      this.root.removeEventListener("keydown", onKeyDown)
+      this.root.removeEventListener("keyup", onKeyUp)
     })
 
     kernel.add(this)
@@ -838,17 +899,29 @@ class ScopeRuntime implements KinesisScope {
     if (this.pointerInside || this.windowPointer) this.kick()
   }
 
-  private findDragTarget(event: PointerEvent): TargetRuntime | undefined {
-    let node: Node | null = event.target instanceof Node ? event.target : null
+  private findGestureTarget(from: EventTarget | null, dragOnly = false): TargetRuntime | undefined {
+    let node: Node | null = from instanceof Node ? from : null
     while (node && node !== this.root) {
       if (node instanceof HTMLElement) {
         if (node.hasAttribute("data-kinesis") && node !== this.root) return undefined
         const target = this.targets.get(node)
-        if (target?.config.drag) return target
+        if (!target) {
+          node = node.parentNode
+          continue
+        }
+        if (dragOnly) {
+          if (target.config.drag) return target
+        } else if (target.config.drag || target.config.press || target.config.hold) {
+          return target
+        }
       }
       node = node.parentNode
     }
     return undefined
+  }
+
+  private findDragTarget(event: PointerEvent): TargetRuntime | undefined {
+    return this.findGestureTarget(event.target, true)
   }
 
   private dragBox(target: TargetRuntime): { left: number; top: number; width: number; height: number } | null {
@@ -869,6 +942,128 @@ class ScopeRuntime implements KinesisScope {
     const axis = resolveDragAxis(target.config.drag, target.config.axis)
     const rest = target.rect ?? { left: 0, top: 0, width: 0, height: 0 }
     return constrainDrag(x, y, rest, this.dragBox(target), snap, axis)
+  }
+
+  private localPoint(target: TargetRuntime, x: number, y: number): { x: number; y: number } {
+    const rect = target.rect
+    return {
+      x: rect ? x - rect.left : x,
+      y: rect ? y - rect.top : y,
+    }
+  }
+
+  private beginPress(event: PointerEvent): void {
+    if (this.destroyed || this.paused || event.button) return
+    const target = this.findGestureTarget(event.target)
+    if (!target) return
+    if (!target.rect) this.measure(target)
+    const point = this.localPoint(target, event.clientX, event.clientY)
+    this.gesture.target = target
+    this.gesture.pointerId = event.pointerId
+    this.gesture.kind = "pointer"
+    this.gesture.startX = event.clientX
+    this.gesture.startY = event.clientY
+    this.gesture.startTime = performance.now()
+    this.gesture.holdMs = target.config.hold
+    target.press = 1
+    target.pressX = point.x
+    target.pressY = point.y
+    target.holdStart = this.gesture.startTime
+    target.holdElapsed = 0
+    target.holdProgress = 0
+    target.holdCompleted = 0
+    target.holdActive = target.config.hold > 0 ? 1 : 0
+    this.kick()
+  }
+
+  private endPress(event: PointerEvent, liveDrag: boolean): void {
+    if (this.gesture.kind !== "pointer" || event.pointerId !== this.gesture.pointerId) return
+    const target = this.gesture.target
+    const elapsed = performance.now() - this.gesture.startTime
+    const move = Math.hypot(event.clientX - this.gesture.startX, event.clientY - this.gesture.startY)
+    const completed = target?.holdCompleted === 1
+    this.gesture.target = null
+    this.gesture.pointerId = -1
+    this.gesture.kind = ""
+    if (!target) return
+    target.press = 0
+    target.holdActive = 0
+    const kind = resolveRelease({ liveDrag, holdCompleted: completed, elapsed, move })
+    if (kind === "tap") {
+      const point = this.localPoint(target, event.clientX, event.clientY)
+      target.tapImpulse = 1
+      target.tapX = point.x
+      target.tapY = point.y
+    }
+    this.kick()
+  }
+
+  private beginKeyPress(event: KeyboardEvent): void {
+    if (this.destroyed || this.paused || event.repeat) return
+    if (event.key !== " " && event.key !== "Enter") return
+    const active = document.activeElement
+    if (!(active instanceof HTMLElement) || /^(input|textarea|select)$/i.test(active.tagName)) return
+    const target = this.findGestureTarget(active)
+    if (!target) return
+    if (event.key === " ") event.preventDefault()
+    if (!target.rect) this.measure(target)
+    this.gesture.target = target
+    this.gesture.pointerId = -2
+    this.gesture.kind = "key"
+    this.gesture.startX = 0
+    this.gesture.startY = 0
+    this.gesture.startTime = performance.now()
+    this.gesture.holdMs = target.config.hold
+    target.press = 1
+    target.pressX = target.rect ? target.rect.width / 2 : 0
+    target.pressY = target.rect ? target.rect.height / 2 : 0
+    target.holdStart = this.gesture.startTime
+    target.holdElapsed = 0
+    target.holdProgress = 0
+    target.holdCompleted = 0
+    target.holdActive = target.config.hold > 0 ? 1 : 0
+    this.kick()
+  }
+
+  private endKeyPress(event: KeyboardEvent): void {
+    if (event.key !== " " && event.key !== "Enter") return
+    if (this.gesture.kind !== "key") return
+    const target = this.gesture.target
+    const elapsed = performance.now() - this.gesture.startTime
+    const completed = target?.holdCompleted === 1
+    this.gesture.target = null
+    this.gesture.pointerId = -1
+    this.gesture.kind = ""
+    if (!target) return
+    target.press = 0
+    target.holdActive = 0
+    const kind = resolveRelease({ liveDrag: false, holdCompleted: completed, elapsed, move: 0 })
+    if (kind === "tap") {
+      target.tapImpulse = 1
+      target.tapX = target.rect ? target.rect.width / 2 : 0
+      target.tapY = target.rect ? target.rect.height / 2 : 0
+    }
+    this.kick()
+  }
+
+  private stepGestures(dt: number, now: number): boolean {
+    let active = false
+    const current = this.gesture.target
+    const holding = Boolean(current && current.press)
+    this.targets.forEach((target) => {
+      if (
+        target.stepTemporal(
+          dt,
+          now,
+          holding && target === current,
+          this.gesture.holdMs,
+          this.drag.live && this.drag.target === target,
+        )
+      ) {
+        active = true
+      }
+    })
+    return active
   }
 
   private beginDrag(event: PointerEvent): void {
@@ -907,6 +1102,10 @@ class ScopeRuntime implements KinesisScope {
       if (along < target.config.dragThreshold) return
       this.drag.live = true
       target.dragLive = true
+      target.holdActive = 0
+      target.holdProgress = 0
+      target.holdElapsed = 0
+      target.holdCompleted = 0
       try {
         target.element.setPointerCapture(event.pointerId)
       } catch {
@@ -1099,6 +1298,7 @@ class ScopeRuntime implements KinesisScope {
         if (parent instanceof HTMLElement) this.parentEls.add(parent)
       }
       if (config.drag) drag = true
+      if (config.press || config.hold || target?.press || target?.tapImpulse) time = true
     }
     consider(this.scopeConfig)
     this.targets.forEach((target) => {
@@ -1247,6 +1447,10 @@ class ScopeRuntime implements KinesisScope {
     const target = this.targets.get(node)
     if (!target) return
     target.refresh(parseTargetConfig(getComputedStyle(node)))
+    if (document.activeElement === node) target.focused = 1
+    else if (target.focused && document.activeElement !== node) target.focused = 0
+    if (!this.coarse) target.hovered = node.matches(":hover") ? 1 : 0
+    else target.hovered = 0
   }
 
   private hasDepthScene(): boolean {
@@ -1434,6 +1638,7 @@ class ScopeRuntime implements KinesisScope {
     const reduceScene = shouldReduceMotion(scopeConfig, this.systemReduce)
     if (this.simulateScene(dt, reduceScene, snap)) active = true
     this.clock += dt
+    if (this.stepGestures(dt, time)) active = true
     const ctx = this.frameCtx
     ctx.clock = this.clock
     ctx.dt = dt
@@ -1713,6 +1918,59 @@ class ScopeRuntime implements KinesisScope {
       progress: new KSignal(() => this.viewProgress(element)),
       visible: new KSignal(() => this.viewVisible(element)),
     }
+  }
+
+  press(selector: string | HTMLElement): PressSignals {
+    const target = this.ensurePress(selector)
+    return {
+      active: new KSignal(() => target.press),
+      x: new KSignal(() => target.pressX),
+      y: new KSignal(() => target.pressY),
+      velocity: {
+        x: new KSignal(() => this.velocity.x),
+        y: new KSignal(() => this.velocity.y),
+      },
+    }
+  }
+
+  hold(selector: string | HTMLElement, options: { duration?: number } = {}): HoldSignals {
+    const target = this.ensurePress(selector)
+    if (options.duration != null) {
+      target.element.style.setProperty("--k-hold", `${options.duration}ms`)
+      target.config.hold = options.duration
+      target.config.press = true
+    } else if (!target.config.hold) {
+      target.element.style.setProperty("--k-hold", `${HOLD_DEFAULT}ms`)
+      target.config.hold = HOLD_DEFAULT
+      target.config.press = true
+    }
+    this.rememberSources()
+    return {
+      active: new KSignal(() => target.holdActive),
+      duration: new KSignal(() => target.holdElapsed),
+      progress: new KSignal(() => target.holdProgress),
+      completed: new KSignal(() => target.holdCompleted),
+    }
+  }
+
+  tap(selector: string | HTMLElement): TapSignals {
+    const target = this.ensurePress(selector)
+    return {
+      impulse: new KSignal(() => target.tapImpulse),
+      x: new KSignal(() => target.tapX),
+      y: new KSignal(() => target.tapY),
+    }
+  }
+
+  private ensurePress(selector: string | HTMLElement): TargetRuntime {
+    const element = this.locate(selector)
+    const target = this.ensureTarget(element)
+    if (!target.config.press && !target.config.hold) {
+      target.element.style.setProperty("--k-press", "1")
+      target.config.press = true
+    }
+    this.rememberSources()
+    return target
   }
 
   motion(selector: string | HTMLElement): MotionHandle {
@@ -2014,6 +2272,13 @@ class ScopeRuntime implements KinesisScope {
     this.drag.live = false
     this.drag.armed = false
     this.drag.pointerId = -1
+    if (this.gesture.target) {
+      this.gesture.target.press = 0
+      this.gesture.target.holdActive = 0
+    }
+    this.gesture.target = null
+    this.gesture.kind = ""
+    this.gesture.pointerId = -1
     kernel.remove(this)
     this.unbind.forEach((fn) => fn())
     this.unbind = []
