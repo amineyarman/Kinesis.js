@@ -295,7 +295,7 @@ export const kinesisRegistry: RegistryEntry[] = [
     kind: "individual",
     status: "SHIP",
     publicPrimitive: true,
-    description: "Orient toward a resolved anchor.",
+    description: "Look-at toward a resolved anchor. A cap glances. A turn keeps turning.",
     owner: "individual",
     driver: ["pointer"],
     relationship: "look-at",

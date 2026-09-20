@@ -45,7 +45,7 @@ export interface MotionHandle {
   edge(value: { radius?: number; force?: number; box?: string }): this
   path(value: { d?: string; strength?: number; orient?: string }): this
   tether(value: { to?: string; length?: number; slack?: number; axis?: string }): this
-  face(value: { to?: string; max?: number; axis?: string; invert?: boolean }): this
+  face(value: { to?: string; max?: number; axis?: string; invert?: boolean; origin?: string }): this
   vortex(value: { strength?: number; radius?: number; spin?: number; pull?: number }): this
   wind(value: { amount?: number; radius?: number }): this
   drag(value?: { axis?: string; bounds?: string; snap?: number; inertia?: number; threshold?: number }): this
@@ -384,6 +384,7 @@ function createHandle(element: HTMLElement, runtime: ScopeRuntime): MotionHandle
         ...(value.to ? { anchor: value.to } : {}),
         ...(value.axis ? { "--k-face-axis": value.axis } : {}),
         ...(value.invert ? { "--k-face-invert": 1 } : {}),
+        ...(value.origin ? { "--k-origin": value.origin } : {}),
       })
     },
     vortex(value) {

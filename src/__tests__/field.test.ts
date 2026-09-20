@@ -104,3 +104,25 @@ it("face rotates toward the anchor", () => {
   const up = computeOutput(base({ face: 18 }), { x: 200, y: 40, nx: 1, ny: -1 }, rect, 0, false, 0, "pointer", undefined, undefined, ctx)
   expect(up.rotateZ).toBeLessThan(0)
 })
+
+it("face can turn the full circle", () => {
+  const ctx = createComputeContext()
+  ctx.anchorX = -80
+  ctx.anchorY = 100
+  ctx.pointerLive = true
+  const glance = computeOutput(base({ face: 24 }), { x: -80, y: 100, nx: -1, ny: 0 }, rect, 0, false, 0, "pointer", undefined, undefined, ctx)
+  expect(glance.rotateZ).toBe(24)
+  const full = computeOutput(base({ face: 360 }), { x: -80, y: 100, nx: -1, ny: 0 }, rect, 0, false, 0, "pointer", undefined, undefined, ctx)
+  expect(Math.abs(full.rotateZ)).toBeCloseTo(180)
+})
+
+it("face xy looks with yaw and pitch", () => {
+  const ctx = createComputeContext()
+  ctx.anchorX = 220
+  ctx.anchorY = 40
+  ctx.pointerLive = true
+  const output = computeOutput(base({ face: 360, faceAxis: "xy" }), { x: 220, y: 40, nx: 1, ny: -1 }, rect, 0, false, 0, "pointer", undefined, undefined, ctx)
+  expect(output.rotateY).toBeGreaterThan(0)
+  expect(output.rotateX).toBeGreaterThan(0)
+  expect(output.rotateZ).toBe(0)
+})

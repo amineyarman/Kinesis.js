@@ -2,6 +2,15 @@ export function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 
+export function shortestDelta(from: number, to: number): number {
+  return ((((to - from) % 360) + 540) % 360) - 180
+}
+
+export function wrapHeading(deg: number): number {
+  const x = ((deg % 360) + 360) % 360
+  return x > 180 ? x - 360 : x
+}
+
 export function lerp(from: number, to: number, amount: number): number {
   return from + (to - from) * amount
 }

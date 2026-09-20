@@ -1,4 +1,4 @@
-import { angleToDeg, clamp, lengthToPx, lerp, splitValues, Spring } from "./core"
+import { angleToDeg, clamp, lengthToPx, lerp, shortestDelta, splitValues, Spring, wrapHeading } from "./core"
 import {
   evaluateField,
   falloffId,
@@ -339,7 +339,69 @@ function optionalNum(value: string): number {
 
 function optionalDeg(value: string): number {
   if (!value || value === "none") return 0
+  if (value === "turn" || value === "infinite") return 360
   return angleToDeg(value)
+}
+
+export function facePlanar(axis: string): boolean {
+  return axis !== "x" && axis !== "y" && axis !== "xy" && axis !== "3d" && axis !== "all"
+}
+
+export function faceYaw(axis: string): boolean {
+  return axis === "x" || axis === "xy" || axis === "3d" || axis === "all"
+}
+
+export function facePitch(axis: string): boolean {
+  return axis === "y" || axis === "xy" || axis === "3d" || axis === "all"
+}
+
+function originAxis(part: string, axis: "x" | "y"): number | undefined {
+  if (part.endsWith("%")) return Number.parseFloat(part) / 100
+  if (part === "center") return 0.5
+  if (part === "0") return 0
+  if (axis === "x") {
+    if (part === "left") return 0
+    if (part === "right") return 1
+    return undefined
+  }
+  if (part === "top") return 0
+  if (part === "bottom") return 1
+  return undefined
+}
+
+export function originPoint(box: LayoutBox, origin: string): { x: number; y: number } {
+  const parts = origin.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  let ox = 0.5
+  let oy = 0.5
+  if (parts.length === 1) {
+    const part = parts[0]!
+    if (part === "left" || part === "right") ox = originAxis(part, "x") ?? 0.5
+    else if (part === "top" || part === "bottom") oy = originAxis(part, "y") ?? 0.5
+    else {
+      const value = originAxis(part, "x")
+      if (value != null) {
+        ox = value
+        oy = value
+      }
+    }
+  } else if (parts.length >= 2) {
+    const first = parts[0]!
+    const second = parts[1]!
+    if (first === "top" || first === "bottom") {
+      oy = originAxis(first, "y") ?? 0
+      ox = originAxis(second, "x") ?? 0.5
+    } else if (second === "top" || second === "bottom") {
+      ox = originAxis(first, "x") ?? 0.5
+      oy = originAxis(second, "y") ?? 0
+    } else {
+      ox = originAxis(first, "x") ?? 0.5
+      oy = originAxis(second, "y") ?? 0.5
+    }
+  }
+  return {
+    x: box.left + box.width * ox,
+    y: box.top + box.height * oy,
+  }
 }
 
 function winding(value: string): number {
@@ -556,7 +618,7 @@ export function parseTargetConfig(style: CSSStyleDeclaration): TargetConfig {
     parallaxY,
     tiltX,
     tiltY,
-    tiltOrigin: read(style, "--k-tilt-origin") || "center",
+    tiltOrigin: read(style, "--k-origin") || read(style, "--k-tilt-origin") || "center",
     axis: read(style, "--k-axis") || "both",
     rotate: angleToDeg(read(style, "--k-rotate") || "0deg"),
     depth: Number.parseFloat(read(style, "--k-depth") || "0") || 0,
@@ -1091,15 +1153,34 @@ export function computeOutput(
   if (live && config.face !== 0) {
     const ax = ctx?.anchorX ?? pointer.x
     const ay = ctx?.anchorY ?? pointer.y
-    const dx = ax - restX
-    const dy = ay - restY
+    const pivot = originPoint(rect, config.tiltOrigin)
+    const dx = ax - pivot.x
+    const dy = ay - pivot.y
     if (dx * dx + dy * dy > 1e-6) {
-      let deg = (Math.atan2(dy, dx) * 180) / Math.PI
-      if (config.faceInvert) deg += 180
-      const turned = clamp(deg, -config.face, config.face) * intensity
-      if (config.faceAxis === "x") output.rotateY += turned
-      else if (config.faceAxis === "y") output.rotateX += turned
-      else output.rotateZ += turned
+      const cap = config.face
+      const free = cap >= 180
+      const axis = config.faceAxis
+      if (faceYaw(axis) || facePitch(axis)) {
+        const depth = Math.max((config.perspective || 1000) * 0.16, 72)
+        let yaw = (Math.atan2(dx, depth) * 180) / Math.PI
+        let pitch = (Math.atan2(-dy, Math.hypot(dx, depth)) * 180) / Math.PI
+        if (config.faceInvert) {
+          yaw += 180
+          pitch = -pitch
+        }
+        if (!free) {
+          yaw = clamp(yaw, -cap, cap)
+          pitch = clamp(pitch, -cap, cap)
+        }
+        if (faceYaw(axis)) output.rotateY += yaw * intensity
+        if (facePitch(axis)) output.rotateX += pitch * intensity
+      }
+      if (facePlanar(axis) || axis === "all") {
+        let heading = (Math.atan2(dy, dx) * 180) / Math.PI
+        if (config.faceInvert) heading += 180
+        heading = wrapHeading(heading)
+        output.rotateZ += (free ? heading : clamp(heading, -cap, cap)) * intensity
+      }
     }
   }
 
@@ -1345,9 +1426,9 @@ export class TargetRuntime {
     this.drive.x = !!(config.parallaxX || shift || this.bindings.x)
     this.drive.y = !!(config.parallaxY || shift || this.bindings.y)
     this.drive.z = !!(config.depth || this.bindings.z)
-    this.drive.rotateX = !!(config.tiltX || (config.face && config.faceAxis === "y") || this.bindings.rotateX)
-    this.drive.rotateY = !!(config.tiltY || (config.face && config.faceAxis === "x") || this.bindings.rotateY)
-    this.drive.rotateZ = !!(config.rotate || config.scrollRotate || config.face || config.bend || this.bindings.rotateZ)
+    this.drive.rotateX = !!(config.tiltX || (config.face && facePitch(config.faceAxis)) || this.bindings.rotateX)
+    this.drive.rotateY = !!(config.tiltY || (config.face && faceYaw(config.faceAxis)) || this.bindings.rotateY)
+    this.drive.rotateZ = !!(config.rotate || config.scrollRotate || (config.face && (facePlanar(config.faceAxis) || config.faceAxis === "all")) || config.bend || this.bindings.rotateZ)
     this.drive.scaleX = !!((audio && config.audioBin < 0) || config.lensOn || this.bindings.scaleX)
     this.drive.scaleY = !!(audio || config.lensOn || this.bindings.scaleY)
     this.drive.path = !!(config.path || this.bindings.path)
@@ -1433,7 +1514,16 @@ export class TargetRuntime {
       const key = CHANNELS[index]!
       const spring = this.springs[key]
       const rest = channelRest(key)
-      spring.target = reduceMotion || !this.drive[key] ? rest : output[key]
+      let target = reduceMotion || !this.drive[key] ? rest : output[key]
+      if (
+        this.config.face &&
+        !reduceMotion &&
+        (key === "rotateX" || key === "rotateY" || key === "rotateZ") &&
+        this.drive[key]
+      ) {
+        target = spring.value + shortestDelta(spring.value, target)
+      }
+      spring.target = target
       if (instant) {
         spring.value = spring.target
         spring.velocity = 0

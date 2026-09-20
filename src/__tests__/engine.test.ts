@@ -1,7 +1,8 @@
 import { expect, it } from "vitest"
 import { constrainDrag } from "../drag"
 import { computeEdge } from "../edge"
-import { applyGroupConfig, computeOutput, createComputeContext, defaults, retainGroupConfig, shouldReduceMotion, solveChain, type GroupConfig, type TargetConfig } from "../effects"
+import { shortestDelta } from "../core"
+import { applyGroupConfig, computeOutput, createComputeContext, defaults, originPoint, retainGroupConfig, shouldReduceMotion, solveChain, type GroupConfig, type TargetConfig } from "../effects"
 
 const base = (overrides: Partial<TargetConfig> = {}): TargetConfig => ({
   ...defaults,
@@ -79,6 +80,17 @@ it("chain keeps neighbor spacing", () => {
   expect(outY[0]).toBe(100)
   expect(Math.hypot(outX[1]! - outX[0]!, outY[1]! - outY[0]!)).toBeCloseTo(20)
   expect(Math.hypot(outX[2]! - outX[1]!, outY[2]! - outY[1]!)).toBeCloseTo(20)
+})
+
+it("shortestDelta unwraps past a turn", () => {
+  expect(shortestDelta(170, -170)).toBeCloseTo(20)
+  expect(shortestDelta(750, 0)).toBeCloseTo(-30)
+})
+
+it("originPoint pins top center", () => {
+  const point = originPoint({ left: 0, top: 0, width: 200, height: 160 }, "top center")
+  expect(point.x).toBe(100)
+  expect(point.y).toBe(0)
 })
 
 it("chain survives a css retune", () => {
