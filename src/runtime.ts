@@ -8,6 +8,7 @@ import {
   isTimeDriven,
   parseGroupConfig,
   parseTargetConfig,
+  retainGroupConfig,
   restOutput,
   shouldReduceMotion,
   solveChain,
@@ -1445,7 +1446,9 @@ class ScopeRuntime implements KinesisScope {
     if (!(node instanceof HTMLElement) || node === this.root || !this.owns(node)) return
     const target = this.targets.get(node)
     if (!target) return
-    target.refresh(parseTargetConfig(getComputedStyle(node)))
+    const config = parseTargetConfig(getComputedStyle(node))
+    retainGroupConfig(config, target.config)
+    target.refresh(config)
     if (document.activeElement === node) target.focused = 1
     else if (target.focused && document.activeElement !== node) target.focused = 0
     if (!this.coarse) target.hovered = node.matches(":hover") ? 1 : 0

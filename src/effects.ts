@@ -435,6 +435,35 @@ export function parseGroupConfig(style: CSSStyleDeclaration): GroupConfig {
   }
 }
 
+export function groupFromTarget(config: TargetConfig): GroupConfig {
+  return {
+    kind: config.group,
+    order: config.groupOrder,
+    wave: config.wave,
+    waveAxis: config.waveAxis,
+    waveSpread: config.waveSpread,
+    waveRadius: config.waveRadius,
+    ripple: config.ripple,
+    rippleRadius: config.rippleRadius,
+    rippleFalloff: config.rippleFalloff,
+    lensScale: config.lensScale,
+    lensRadius: config.lensRadius,
+    bend: config.bend,
+    bendRadius: config.bendRadius,
+    orbit: config.orbit,
+    orbitSpeed: config.orbitSpeed,
+    orbitDirection: config.orbitDirection,
+    orbitMode: config.orbitMode,
+    orbitPhase: config.orbitPhase,
+    chain: config.chain,
+  }
+}
+
+export function retainGroupConfig(next: TargetConfig, prev: TargetConfig): void {
+  if (!prev.group) return
+  applyGroupConfig(next, groupFromTarget(prev), prev.groupIndex, prev.groupCount)
+}
+
 export function applyGroupConfig(config: TargetConfig, group: GroupConfig, index: number, count: number): void {
   if (!group.kind) return
   config.group = group.kind

@@ -1,7 +1,7 @@
 import { expect, it } from "vitest"
 import { constrainDrag } from "../drag"
 import { computeEdge } from "../edge"
-import { computeOutput, createComputeContext, defaults, shouldReduceMotion, solveChain, type TargetConfig } from "../effects"
+import { applyGroupConfig, computeOutput, createComputeContext, defaults, retainGroupConfig, shouldReduceMotion, solveChain, type GroupConfig, type TargetConfig } from "../effects"
 
 const base = (overrides: Partial<TargetConfig> = {}): TargetConfig => ({
   ...defaults,
@@ -79,6 +79,37 @@ it("chain keeps neighbor spacing", () => {
   expect(outY[0]).toBe(100)
   expect(Math.hypot(outX[1]! - outX[0]!, outY[1]! - outY[0]!)).toBeCloseTo(20)
   expect(Math.hypot(outX[2]! - outX[1]!, outY[2]! - outY[1]!)).toBeCloseTo(20)
+})
+
+it("chain survives a css retune", () => {
+  const group: GroupConfig = {
+    kind: "chain",
+    order: "sequence",
+    wave: 0,
+    waveAxis: "y",
+    waveSpread: 0.18,
+    waveRadius: 160,
+    ripple: 0,
+    rippleRadius: 180,
+    rippleFalloff: 0,
+    lensScale: 1.25,
+    lensRadius: 120,
+    bend: 0,
+    bendRadius: 160,
+    orbit: 0,
+    orbitSpeed: 0.25,
+    orbitDirection: 1,
+    orbitMode: "time",
+    orbitPhase: 0,
+    chain: 22,
+  }
+  const live = { ...defaults }
+  applyGroupConfig(live, group, 2, 8)
+  expect(live.chain).toBe(22)
+  const next = { ...defaults }
+  retainGroupConfig(next, live)
+  expect(next.chain).toBe(22)
+  expect(next.group).toBe("chain")
 })
 
 it("edge pushes inward from the nearest side", () => {
