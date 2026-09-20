@@ -2,7 +2,7 @@ import { expect, it } from "vitest"
 import { constrainDrag } from "../drag"
 import { computeEdge } from "../edge"
 import { shortestDelta } from "../core"
-import { applyGroupConfig, computeOutput, createComputeContext, defaults, originPoint, retainGroupConfig, shouldReduceMotion, solveChain, type GroupConfig, type TargetConfig } from "../effects"
+import { applyGroupConfig, computeOutput, createComputeContext, defaults, originPoint, retainGroupConfig, shouldReduceMotion, solveChain, solveChainReach, type GroupConfig, type TargetConfig } from "../effects"
 
 const base = (overrides: Partial<TargetConfig> = {}): TargetConfig => ({
   ...defaults,
@@ -114,6 +114,8 @@ it("chain survives a css retune", () => {
     orbitMode: "time",
     orbitPhase: 0,
     chain: 22,
+    chainMode: "follow",
+    chainLimit: 0,
   }
   const live = { ...defaults }
   applyGroupConfig(live, group, 2, 8)
@@ -122,6 +124,53 @@ it("chain survives a css retune", () => {
   retainGroupConfig(next, live)
   expect(next.chain).toBe(22)
   expect(next.group).toBe("chain")
+})
+
+it("reach plants the root and sends the tip to the target", () => {
+  const outX = [0, 0, 0, 0]
+  const outY = [0, 0, 0, 0]
+  solveChainReach(
+    [100, 140, 180, 220],
+    [100, 100, 100, 100],
+    [Number.NaN, Number.NaN, Number.NaN, Number.NaN],
+    [Number.NaN, Number.NaN, Number.NaN, Number.NaN],
+    100,
+    20,
+    40,
+    2,
+    0,
+    outX,
+    outY,
+  )
+  expect(outX[0]).toBe(100)
+  expect(outY[0]).toBe(100)
+  expect(outX[3]).toBeCloseTo(100)
+  expect(outY[3]).toBeCloseTo(20)
+  expect(Math.hypot(outX[1]! - outX[0]!, outY[1]! - outY[0]!)).toBeCloseTo(40)
+  expect(Math.hypot(outX[2]! - outX[1]!, outY[2]! - outY[1]!)).toBeCloseTo(40)
+  expect(Math.hypot(outX[3]! - outX[2]!, outY[3]! - outY[2]!)).toBeCloseTo(40)
+})
+
+it("reach stretches toward an out-of-range target", () => {
+  const outX = [0, 0, 0]
+  const outY = [0, 0, 0]
+  solveChainReach(
+    [100, 140, 180],
+    [100, 100, 100],
+    [Number.NaN, Number.NaN, Number.NaN],
+    [Number.NaN, Number.NaN, Number.NaN],
+    100,
+    -400,
+    40,
+    2,
+    0,
+    outX,
+    outY,
+  )
+  expect(outX[0]).toBe(100)
+  expect(outY[0]).toBe(100)
+  expect(outX[2]).toBeCloseTo(100)
+  expect(outY[2]).toBeCloseTo(20)
 })
 
 it("edge pushes inward from the nearest side", () => {

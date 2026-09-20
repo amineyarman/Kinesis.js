@@ -103,6 +103,8 @@ export interface TargetConfig {
   bend: number
   bendRadius: number
   chain: number
+  chainMode: string
+  chainLimit: number
   wake: number
   wakeForce: number
   wakeRadius: number
@@ -142,6 +144,8 @@ export interface GroupConfig {
   orbitMode: string
   orbitPhase: number
   chain: number
+  chainMode: string
+  chainLimit: number
 }
 
 export interface MotionOutput {
@@ -289,6 +293,8 @@ export const defaults: TargetConfig = {
   bend: 0,
   bendRadius: 160,
   chain: 0,
+  chainMode: "follow",
+  chainLimit: 0,
   wake: 0,
   wakeForce: 0,
   wakeRadius: 90,
@@ -469,6 +475,83 @@ export function solveChain(
   }
 }
 
+export function solveChainReach(
+  restX: number[],
+  restY: number[],
+  prevX: number[],
+  prevY: number[],
+  targetX: number,
+  targetY: number,
+  sep: number,
+  passes: number,
+  limit: number,
+  outX: number[],
+  outY: number[],
+): void {
+  const count = restX.length
+  if (!count) return
+  const rootX = restX[0]!
+  const rootY = restY[0]!
+  if (count === 1) {
+    outX[0] = rootX
+    outY[0] = rootY
+    return
+  }
+  for (let index = 0; index < count; index += 1) {
+    outX[index] = Number.isFinite(prevX[index]) ? prevX[index]! : restX[index]!
+    outY[index] = Number.isFinite(prevY[index]) ? prevY[index]! : restY[index]!
+  }
+  const span = sep * (count - 1)
+  const rdx = targetX - rootX
+  const rdy = targetY - rootY
+  const dist = Math.hypot(rdx, rdy)
+  if (dist > span || dist < 1e-6) {
+    const nx = dist < 1e-6 ? 1 : rdx / dist
+    const ny = dist < 1e-6 ? 0 : rdy / dist
+    for (let index = 0; index < count; index += 1) {
+      outX[index] = rootX + nx * sep * index
+      outY[index] = rootY + ny * sep * index
+    }
+    return
+  }
+  const place = (from: number, to: number, cap: boolean) => {
+    let dx = outX[to]! - outX[from]!
+    let dy = outY[to]! - outY[from]!
+    let d = Math.hypot(dx, dy)
+    if (d < 1e-6) {
+      dx = sep
+      dy = 0
+      d = sep
+    }
+    if (cap && limit > 0 && from > 0) {
+      const px = outX[from]! - outX[from - 1]!
+      const py = outY[from]! - outY[from - 1]!
+      const base = Math.atan2(py, px)
+      let ang = Math.atan2(dy, dx)
+      let delta = ang - base
+      if (delta > Math.PI) delta -= Math.PI * 2
+      if (delta < -Math.PI) delta += Math.PI * 2
+      const max = (limit * Math.PI) / 180
+      if (delta > max) ang = base + max
+      if (delta < -max) ang = base - max
+      outX[to] = outX[from]! + Math.cos(ang) * sep
+      outY[to] = outY[from]! + Math.sin(ang) * sep
+      return
+    }
+    outX[to] = outX[from]! + (dx / d) * sep
+    outY[to] = outY[from]! + (dy / d) * sep
+  }
+  const steps = Math.max(1, passes)
+  for (let pass = 0; pass < steps; pass += 1) {
+    outX[count - 1] = targetX
+    outY[count - 1] = targetY
+    for (let index = count - 2; index >= 0; index -= 1) place(index + 1, index, false)
+    outX[0] = rootX
+    outY[0] = rootY
+    for (let index = 1; index < count; index += 1) place(index - 1, index, true)
+  }
+}
+
 export function parseGroupConfig(style: CSSStyleDeclaration): GroupConfig {
   const kind = read(style, "--k-group")
   const order = read(style, "--k-group-order")
@@ -494,6 +577,8 @@ export function parseGroupConfig(style: CSSStyleDeclaration): GroupConfig {
     orbitMode: read(style, "--k-orbit-mode") || "time",
     orbitPhase: angleToDeg(read(style, "--k-orbit-phase") || "0deg"),
     chain: resolved === "chain" ? chain || 20 : chain,
+    chainMode: read(style, "--k-chain-mode") === "reach" ? "reach" : "follow",
+    chainLimit: optionalDeg(read(style, "--k-chain-limit")),
   }
 }
 
@@ -518,6 +603,8 @@ export function groupFromTarget(config: TargetConfig): GroupConfig {
     orbitMode: config.orbitMode,
     orbitPhase: config.orbitPhase,
     chain: config.chain,
+    chainMode: config.chainMode,
+    chainLimit: config.chainLimit,
   }
 }
 
@@ -566,6 +653,8 @@ export function applyGroupConfig(config: TargetConfig, group: GroupConfig, index
     if (!config.orbitPhase && count) config.orbitPhase = (360 / count) * index
   } else if (group.kind === "chain") {
     if (!config.chain) config.chain = group.chain || 20
+    config.chainMode = group.chainMode || "follow"
+    if (!config.chainLimit) config.chainLimit = group.chainLimit
   }
 }
 
@@ -690,6 +779,8 @@ export function parseTargetConfig(style: CSSStyleDeclaration): TargetConfig {
     bend: grouped ? 0 : optionalDeg(read(style, "--k-bend")),
     bendRadius: lengthToPx(read(style, "--k-bend-radius") || "160px"),
     chain: grouped ? 0 : optionalPx(read(style, "--k-chain")),
+    chainMode: read(style, "--k-chain-mode") === "reach" ? "reach" : "follow",
+    chainLimit: optionalDeg(read(style, "--k-chain-limit")),
     wake,
     wakeForce: optionalPx(read(style, "--k-wake-force")) || (wake ? 28 : 0),
     wakeRadius: lengthToPx(read(style, "--k-wake-radius") || "90px"),

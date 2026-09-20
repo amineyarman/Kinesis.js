@@ -12,6 +12,7 @@ import {
   restOutput,
   shouldReduceMotion,
   solveChain,
+  solveChainReach,
   TargetRuntime,
   type ComputeContext,
   type GroupConfig,
@@ -64,7 +65,7 @@ export interface GroupHandle {
   lens(value?: { scale?: number; radius?: number }): this
   bend(value?: { amount?: number; radius?: number }): this
   orbit(value?: { radius?: number; speed?: number }): this
-  chain(value?: { length?: number }): this
+  chain(value?: { length?: number; mode?: string; limit?: number }): this
 }
 
 export type FieldForce = "attract" | "repel" | "orbit" | "vortex" | "directional"
@@ -261,7 +262,7 @@ function formatCssValue(name: string, value: string | number | number[]): string
   if (typeof value === "number") {
     if (name === "--k-wake" || name === "--k-hold") return `${value}ms`
     if (name === "--k-press") return String(value)
-    if (/tilt|rotate|face|bend|phase/.test(name)) return `${value}deg`
+    if (/tilt|rotate|face|bend|phase|chain-limit/.test(name)) return `${value}deg`
     if (
       name !== "--k-wake-force" &&
       name !== "--k-edge-force" &&
@@ -2035,6 +2036,8 @@ class ScopeRuntime implements KinesisScope {
       chain: (value = {}) =>
         apply("chain", {
           "--k-chain": value.length ?? 20,
+          ...(value.mode ? { "--k-chain-mode": value.mode } : {}),
+          ...(value.limit != null ? { "--k-chain-limit": value.limit } : {}),
         }),
     }
     return handle
@@ -2135,18 +2138,39 @@ class ScopeRuntime implements KinesisScope {
         this.chainPrevX[index] = member.chainX
         this.chainPrevY[index] = member.chainY
       }
-      solveChain(
-        this.chainRestX,
-        this.chainRestY,
-        this.chainPrevX,
-        this.chainPrevY,
-        ax,
-        ay,
-        head.config.chain || 20,
-        count <= CHAIN_HQ ? 2 : 1,
-        this.chainOutX,
-        this.chainOutY,
-      )
+      const sep = head.config.chain || 20
+      const passes = count <= CHAIN_HQ ? 2 : 1
+      if (head.config.chainMode === "reach") {
+        const tip = members[count - 1]!
+        if (!tip.rect) this.measure(tip)
+        this.fillAnchor(tip, pointer, ctx)
+        solveChainReach(
+          this.chainRestX,
+          this.chainRestY,
+          this.chainPrevX,
+          this.chainPrevY,
+          ctx.anchorX,
+          ctx.anchorY,
+          sep,
+          passes,
+          head.config.chainLimit,
+          this.chainOutX,
+          this.chainOutY,
+        )
+      } else {
+        solveChain(
+          this.chainRestX,
+          this.chainRestY,
+          this.chainPrevX,
+          this.chainPrevY,
+          ax,
+          ay,
+          sep,
+          passes,
+          this.chainOutX,
+          this.chainOutY,
+        )
+      }
       for (let index = 0; index < count; index += 1) {
         const member = members[index]!
         member.chainX = this.chainOutX[index]!
