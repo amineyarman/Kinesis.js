@@ -114,7 +114,7 @@ export const kinesisRegistry: RegistryEntry[] = [
     description: "Page or element progress, velocity, and direction.",
     owner: "source",
     ready: true,
-    docsPath: "/docs/effects/scroll/",
+    docsPath: "/docs/concepts/sources/",
   }),
   item({
     id: "view",
