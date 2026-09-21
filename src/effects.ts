@@ -105,6 +105,7 @@ export interface TargetConfig {
   chain: number
   chainMode: string
   chainLimit: number
+  chainOrient: string
   wake: number
   wakeForce: number
   wakeRadius: number
@@ -146,6 +147,7 @@ export interface GroupConfig {
   chain: number
   chainMode: string
   chainLimit: number
+  chainOrient: string
 }
 
 export interface MotionOutput {
@@ -198,6 +200,8 @@ export interface ComputeContext {
   hasChain: boolean
   chainX: number
   chainY: number
+  hasChainR: boolean
+  chainR: number
   wakeNow: number
   wakeStart: number
   wakeLog: Array<{ t: number; x: number; y: number }> | null
@@ -295,6 +299,7 @@ export const defaults: TargetConfig = {
   chain: 0,
   chainMode: "follow",
   chainLimit: 0,
+  chainOrient: "none",
   wake: 0,
   wakeForce: 0,
   wakeRadius: 90,
@@ -552,6 +557,24 @@ export function solveChainReach(
   }
 }
 
+export function chainHeading(ax: number, ay: number, bx: number, by: number): number {
+  return (Math.atan2(by - ay, bx - ax) * 180) / Math.PI
+}
+
+export function orientChain(xs: number[], ys: number[], out: number[]): void {
+  const count = xs.length
+  if (count < 2) {
+    for (let index = 0; index < count; index += 1) out[index] = Number.NaN
+    return
+  }
+  for (let index = 0; index < count; index += 1) {
+    out[index] =
+      index < count - 1
+        ? chainHeading(xs[index]!, ys[index]!, xs[index + 1]!, ys[index + 1]!)
+        : chainHeading(xs[index - 1]!, ys[index - 1]!, xs[index]!, ys[index]!)
+  }
+}
+
 export function parseGroupConfig(style: CSSStyleDeclaration): GroupConfig {
   const kind = read(style, "--k-group")
   const order = read(style, "--k-group-order")
@@ -579,6 +602,7 @@ export function parseGroupConfig(style: CSSStyleDeclaration): GroupConfig {
     chain: resolved === "chain" ? chain || 20 : chain,
     chainMode: read(style, "--k-chain-mode") === "reach" ? "reach" : "follow",
     chainLimit: optionalDeg(read(style, "--k-chain-limit")),
+    chainOrient: read(style, "--k-chain-orient") === "auto" ? "auto" : "none",
   }
 }
 
@@ -605,6 +629,7 @@ export function groupFromTarget(config: TargetConfig): GroupConfig {
     chain: config.chain,
     chainMode: config.chainMode,
     chainLimit: config.chainLimit,
+    chainOrient: config.chainOrient,
   }
 }
 
@@ -655,6 +680,7 @@ export function applyGroupConfig(config: TargetConfig, group: GroupConfig, index
     if (!config.chain) config.chain = group.chain || 20
     config.chainMode = group.chainMode || "follow"
     if (!config.chainLimit) config.chainLimit = group.chainLimit
+    config.chainOrient = group.chainOrient || "none"
   }
 }
 
@@ -781,6 +807,7 @@ export function parseTargetConfig(style: CSSStyleDeclaration): TargetConfig {
     chain: grouped ? 0 : optionalPx(read(style, "--k-chain")),
     chainMode: read(style, "--k-chain-mode") === "reach" ? "reach" : "follow",
     chainLimit: optionalDeg(read(style, "--k-chain-limit")),
+    chainOrient: read(style, "--k-chain-orient") === "auto" ? "auto" : "none",
     wake,
     wakeForce: optionalPx(read(style, "--k-wake-force")) || (wake ? 28 : 0),
     wakeRadius: lengthToPx(read(style, "--k-wake-radius") || "90px"),
@@ -978,6 +1005,8 @@ export function createComputeContext(): ComputeContext {
     hasChain: false,
     chainX: 0,
     chainY: 0,
+    hasChainR: false,
+    chainR: 0,
     wakeNow: 0,
     wakeStart: 0,
     wakeLog: null,
@@ -1079,6 +1108,7 @@ export function computeOutput(
     output.x += (ctx.chainX - restX) * intensity
     output.y += (ctx.chainY - restY) * intensity
   }
+  if (ctx?.hasChainR) output.rotateZ += ctx.chainR
   if (config.edge > 0 && config.edgeForce !== 0 && ctx && ctx.boxW > 0 && ctx.boxH > 0) {
     const sample = computeEdge(restX, restY, ctx.boxLeft, ctx.boxTop, ctx.boxW, ctx.boxH, config.edge)
     output.x += sample.nx * config.edgeForce * sample.progress * intensity
@@ -1380,6 +1410,7 @@ export class TargetRuntime {
   orbitVel = 0
   chainX = Number.NaN
   chainY = Number.NaN
+  chainR = Number.NaN
   dragX = 0
   dragY = 0
   dragLive = false
@@ -1519,7 +1550,7 @@ export class TargetRuntime {
     this.drive.z = !!(config.depth || this.bindings.z)
     this.drive.rotateX = !!(config.tiltX || (config.face && facePitch(config.faceAxis)) || this.bindings.rotateX)
     this.drive.rotateY = !!(config.tiltY || (config.face && faceYaw(config.faceAxis)) || this.bindings.rotateY)
-    this.drive.rotateZ = !!(config.rotate || config.scrollRotate || (config.face && (facePlanar(config.faceAxis) || config.faceAxis === "all")) || config.bend || this.bindings.rotateZ)
+    this.drive.rotateZ = !!(config.rotate || config.scrollRotate || (config.face && (facePlanar(config.faceAxis) || config.faceAxis === "all")) || config.bend || (config.chain && config.chainOrient === "auto") || this.bindings.rotateZ)
     this.drive.scaleX = !!((audio && config.audioBin < 0) || config.lensOn || this.bindings.scaleX)
     this.drive.scaleY = !!(audio || config.lensOn || this.bindings.scaleY)
     this.drive.path = !!(config.path || this.bindings.path)
@@ -1607,10 +1638,10 @@ export class TargetRuntime {
       const rest = channelRest(key)
       let target = reduceMotion || !this.drive[key] ? rest : output[key]
       if (
-        this.config.face &&
         !reduceMotion &&
         (key === "rotateX" || key === "rotateY" || key === "rotateZ") &&
-        this.drive[key]
+        this.drive[key] &&
+        (this.config.face || this.config.chainOrient === "auto")
       ) {
         target = spring.value + shortestDelta(spring.value, target)
       }

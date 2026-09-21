@@ -11,6 +11,7 @@ import {
   retainGroupConfig,
   restOutput,
   shouldReduceMotion,
+  orientChain,
   solveChain,
   solveChainReach,
   TargetRuntime,
@@ -65,7 +66,7 @@ export interface GroupHandle {
   lens(value?: { scale?: number; radius?: number }): this
   bend(value?: { amount?: number; radius?: number }): this
   orbit(value?: { radius?: number; speed?: number }): this
-  chain(value?: { length?: number; mode?: string; limit?: number }): this
+  chain(value?: { length?: number; mode?: string; limit?: number; orient?: string }): this
 }
 
 export type FieldForce = "attract" | "repel" | "orbit" | "vortex" | "directional"
@@ -590,6 +591,7 @@ class ScopeRuntime implements KinesisScope {
   private chainPrevY: number[] = []
   private chainOutX: number[] = []
   private chainOutY: number[] = []
+  private chainOutR: number[] = []
   private wakeDriven = false
   private maxWake = 0
   private pointerInside = false
@@ -2038,6 +2040,7 @@ class ScopeRuntime implements KinesisScope {
           "--k-chain": value.length ?? 20,
           ...(value.mode ? { "--k-chain-mode": value.mode } : {}),
           ...(value.limit != null ? { "--k-chain-limit": value.limit } : {}),
+          ...(value.orient ? { "--k-chain-orient": value.orient } : {}),
         }),
     }
     return handle
@@ -2108,36 +2111,41 @@ class ScopeRuntime implements KinesisScope {
       const members = this.chains[group]
       if (!members?.length) continue
       const count = members.length
-      if (!live) {
-        for (let index = 0; index < count; index += 1) {
-          const member = members[index]!
-          member.chainX = Number.NaN
-          member.chainY = Number.NaN
-        }
-        continue
-      }
       const head = members[0]!
       if (!head.rect) this.measure(head)
-      this.fillAnchor(head, pointer, ctx)
-      const rest0x = head.rect ? head.rect.left + head.rect.width / 2 : ctx.anchorX
-      const rest0y = head.rect ? head.rect.top + head.rect.height / 2 : ctx.anchorY
-      const ax = live ? ctx.anchorX : rest0x
-      const ay = live ? ctx.anchorY : rest0y
+      const rest0x = head.rect ? head.rect.left + head.rect.width / 2 : this.pointerState.x
+      const rest0y = head.rect ? head.rect.top + head.rect.height / 2 : this.pointerState.y
       this.chainRestX.length = count
       this.chainRestY.length = count
       this.chainPrevX.length = count
       this.chainPrevY.length = count
       this.chainOutX.length = count
       this.chainOutY.length = count
+      this.chainOutR.length = count
       for (let index = 0; index < count; index += 1) {
         const member = members[index]!
         if (!member.rect) this.measure(member)
         const box = member.rect
-        this.chainRestX[index] = box ? box.left + box.width / 2 : ax
-        this.chainRestY[index] = box ? box.top + box.height / 2 : ay
+        this.chainRestX[index] = box ? box.left + box.width / 2 : rest0x
+        this.chainRestY[index] = box ? box.top + box.height / 2 : rest0y
         this.chainPrevX[index] = member.chainX
         this.chainPrevY[index] = member.chainY
       }
+      if (!live) {
+        if (head.config.chainOrient === "auto") {
+          orientChain(this.chainRestX, this.chainRestY, this.chainOutR)
+        }
+        for (let index = 0; index < count; index += 1) {
+          const member = members[index]!
+          member.chainX = Number.NaN
+          member.chainY = Number.NaN
+          member.chainR = head.config.chainOrient === "auto" ? this.chainOutR[index]! : Number.NaN
+        }
+        continue
+      }
+      this.fillAnchor(head, pointer, ctx)
+      const ax = ctx.anchorX
+      const ay = ctx.anchorY
       const sep = head.config.chain || 20
       const passes = count <= CHAIN_HQ ? 2 : 1
       if (head.config.chainMode === "reach") {
@@ -2171,10 +2179,14 @@ class ScopeRuntime implements KinesisScope {
           this.chainOutY,
         )
       }
+      if (head.config.chainOrient === "auto") {
+        orientChain(this.chainOutX, this.chainOutY, this.chainOutR)
+      }
       for (let index = 0; index < count; index += 1) {
         const member = members[index]!
         member.chainX = this.chainOutX[index]!
         member.chainY = this.chainOutY[index]!
+        member.chainR = head.config.chainOrient === "auto" ? this.chainOutR[index]! : Number.NaN
       }
     }
   }
@@ -2213,6 +2225,8 @@ class ScopeRuntime implements KinesisScope {
     ctx.hasChain = target.config.chain !== 0 && Number.isFinite(target.chainX)
     ctx.chainX = target.chainX
     ctx.chainY = target.chainY
+    ctx.hasChainR = target.config.chainOrient === "auto" && Number.isFinite(target.chainR)
+    ctx.chainR = target.chainR
     ctx.groupIndex = target.config.groupIndex
     ctx.groupCount = target.config.groupCount
     this.fillEdgeBox(target, ctx)

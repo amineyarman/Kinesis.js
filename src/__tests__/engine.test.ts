@@ -2,7 +2,7 @@ import { expect, it } from "vitest"
 import { constrainDrag } from "../drag"
 import { computeEdge } from "../edge"
 import { shortestDelta } from "../core"
-import { applyGroupConfig, computeOutput, createComputeContext, defaults, originPoint, retainGroupConfig, shouldReduceMotion, solveChain, solveChainReach, type GroupConfig, type TargetConfig } from "../effects"
+import { applyGroupConfig, chainHeading, computeOutput, createComputeContext, defaults, orientChain, originPoint, retainGroupConfig, shouldReduceMotion, solveChain, solveChainReach, type GroupConfig, type TargetConfig } from "../effects"
 
 const base = (overrides: Partial<TargetConfig> = {}): TargetConfig => ({
   ...defaults,
@@ -116,6 +116,7 @@ it("chain survives a css retune", () => {
     chain: 22,
     chainMode: "follow",
     chainLimit: 0,
+    chainOrient: "auto",
   }
   const live = { ...defaults }
   applyGroupConfig(live, group, 2, 8)
@@ -124,6 +125,17 @@ it("chain survives a css retune", () => {
   retainGroupConfig(next, live)
   expect(next.chain).toBe(22)
   expect(next.group).toBe("chain")
+  expect(next.chainOrient).toBe("auto")
+})
+
+it("chain bones aim at the next joint", () => {
+  expect(chainHeading(100, 100, 140, 100)).toBeCloseTo(0)
+  expect(chainHeading(100, 100, 100, 60)).toBeCloseTo(-90)
+  const out = [0, 0, 0]
+  orientChain([100, 140, 180], [100, 100, 100], out)
+  expect(out[0]).toBeCloseTo(0)
+  expect(out[1]).toBeCloseTo(0)
+  expect(out[2]).toBeCloseTo(0)
 })
 
 it("reach plants the root and sends the tip to the target", () => {
