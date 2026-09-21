@@ -709,7 +709,7 @@ export function parseGroupConfig(style: CSSStyleDeclaration): GroupConfig {
   const kind = read(style, "--k-group")
   const order = read(style, "--k-group-order")
   const chain = optionalPx(read(style, "--k-chain"))
-  const resolved = kind && kind !== "none" ? kind : chain ? "chain" : ""
+  const resolved = kind && kind !== "none" ? kind : !kind && chain ? "chain" : ""
   return {
     kind: resolved,
     order: order && order !== "none" && order !== "auto" ? order : defaultOrder(resolved),

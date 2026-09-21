@@ -2,7 +2,7 @@ import { expect, it } from "vitest"
 import { constrainDrag } from "../drag"
 import { computeEdge } from "../edge"
 import { shortestDelta } from "../core"
-import { applyGroupConfig, chainHeading, computeOutput, createComputeContext, defaults, orientChain, originPoint, retainGroupConfig, shouldReduceMotion, solveChain, solveChainReach, type GroupConfig, type TargetConfig } from "../effects"
+import { applyGroupConfig, chainHeading, computeOutput, createComputeContext, defaults, orientChain, originPoint, parseGroupConfig, retainGroupConfig, shouldReduceMotion, solveChain, solveChainReach, type GroupConfig, type TargetConfig } from "../effects"
 
 const base = (overrides: Partial<TargetConfig> = {}): TargetConfig => ({
   ...defaults,
@@ -91,6 +91,24 @@ it("originPoint pins top center", () => {
   const point = originPoint({ left: 0, top: 0, width: 200, height: 160 }, "top center")
   expect(point.x).toBe(100)
   expect(point.y).toBe(0)
+})
+
+it("chain length alone still makes a host", () => {
+  const style = {
+    getPropertyValue: (name: string) => (name === "--k-chain" ? "22px" : ""),
+  } as CSSStyleDeclaration
+  expect(parseGroupConfig(style).kind).toBe("chain")
+})
+
+it("chain length does not make a group when group is none", () => {
+  const style = {
+    getPropertyValue: (name: string) => {
+      if (name === "--k-group") return "none"
+      if (name === "--k-chain") return "40px"
+      return ""
+    },
+  } as CSSStyleDeclaration
+  expect(parseGroupConfig(style).kind).toBe("")
 })
 
 it("chain survives a css retune", () => {

@@ -1569,7 +1569,13 @@ class ScopeRuntime implements KinesisScope {
         if (!this.named.has(name)) this.named.set(name, { el: node, box: { left: 0, top: 0, width: 0, height: 0 } })
       }
       const group = parseGroupConfig(style)
-      if (group.kind) groups.push({ node, group })
+      if (group.kind) {
+        const named = style.getPropertyValue("--k-group").trim()
+        const implied = !named || named === "none"
+        const nested =
+          implied && groups.some((entry) => entry.group.kind === "chain" && entry.node.contains(node))
+        if (!nested) groups.push({ node, group })
+      }
       if (node === this.root) return
       const config = parseTargetConfig(style)
       const existing = this.targets.get(node)
