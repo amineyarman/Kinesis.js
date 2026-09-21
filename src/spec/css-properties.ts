@@ -1243,7 +1243,7 @@ export const cssProperties: CssPropertySpec[] = [
   {
     name: "--k-chain",
     title: "Chain",
-    description: "Desired neighbor separation for a chain group.",
+    description: "Desired neighbor separation. On a child, the outgoing bone length.",
     syntax: "none | <length>",
     values: "none | length",
     defaultValue: "none",

@@ -185,6 +185,50 @@ it("reach stretches toward an out-of-range target", () => {
   expect(outY[2]).toBeCloseTo(20)
 })
 
+it("reach swings a short arm onto a nearby target", () => {
+  const outX = [0, 0, 0, 0]
+  const outY = [0, 0, 0, 0]
+  solveChainReach(
+    [100, 100, 100, 100],
+    [100, 60, 20, -20],
+    [100, 100, 100, 100],
+    [100, 60, 20, -20],
+    180,
+    100,
+    40,
+    2,
+    64,
+    outX,
+    outY,
+  )
+  expect(outX[0]).toBe(100)
+  expect(outY[0]).toBe(100)
+  expect(Math.hypot(outX[3]! - 180, outY[3]! - 100)).toBeLessThan(2)
+  expect(Math.hypot(outX[1]! - outX[0]!, outY[1]! - outY[0]!)).toBeCloseTo(40)
+})
+
+it("reach honors a shorter last bone", () => {
+  const outX = [0, 0, 0]
+  const outY = [0, 0, 0]
+  solveChainReach(
+    [100, 140, 180],
+    [100, 100, 100],
+    [Number.NaN, Number.NaN, Number.NaN],
+    [Number.NaN, Number.NaN, Number.NaN],
+    100,
+    50,
+    [40, 16],
+    2,
+    0,
+    outX,
+    outY,
+  )
+  expect(outX[0]).toBe(100)
+  expect(outY[0]).toBe(100)
+  expect(Math.hypot(outX[2]! - 100, outY[2]! - 50)).toBeLessThan(0.5)
+  expect(Math.hypot(outX[2]! - outX[1]!, outY[2]! - outY[1]!)).toBeCloseTo(16)
+})
+
 it("edge pushes inward from the nearest side", () => {
   const sample = computeEdge(10, 80, 0, 0, 200, 160, 40)
   expect(sample.left).toBe(10)

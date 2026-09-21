@@ -434,7 +434,127 @@ function timeToMs(value: string): number {
 
 export const CHAIN_MAX = 64
 export const CHAIN_HQ = 32
+export const CHAIN_CCD = 8
 export const WAKE_MAX_SAMPLES = 12
+
+export type ChainSpan = number | number[]
+
+function chainBone(sep: ChainSpan, index: number): number {
+  if (typeof sep === "number") return sep > 0 ? sep : 20
+  const value = sep[index]
+  return value && value > 0 ? value : 20
+}
+
+function chainSpanOf(sep: ChainSpan, count: number): number {
+  if (count < 2) return 0
+  if (typeof sep === "number") return (sep > 0 ? sep : 20) * (count - 1)
+  let total = 0
+  for (let index = 0; index < count - 1; index += 1) total += chainBone(sep, index)
+  return total
+}
+
+function wrapRad(value: number): number {
+  if (value > Math.PI) return value - Math.PI * 2
+  if (value < -Math.PI) return value + Math.PI * 2
+  return value
+}
+
+function stretchChain(
+  rootX: number,
+  rootY: number,
+  nx: number,
+  ny: number,
+  sep: ChainSpan,
+  count: number,
+  outX: number[],
+  outY: number[],
+): void {
+  let x = rootX
+  let y = rootY
+  outX[0] = x
+  outY[0] = y
+  for (let index = 1; index < count; index += 1) {
+    const len = chainBone(sep, index - 1)
+    x += nx * len
+    y += ny * len
+    outX[index] = x
+    outY[index] = y
+  }
+}
+
+function fitBones(outX: number[], outY: number[], sep: ChainSpan, count: number): void {
+  for (let index = 1; index < count; index += 1) {
+    const len = chainBone(sep, index - 1)
+    let dx = outX[index]! - outX[index - 1]!
+    let dy = outY[index]! - outY[index - 1]!
+    let d = Math.hypot(dx, dy)
+    if (d < 1e-6) {
+      dx = len
+      dy = 0
+      d = len
+    }
+    outX[index] = outX[index - 1]! + (dx / d) * len
+    outY[index] = outY[index - 1]! + (dy / d) * len
+  }
+}
+
+function rotateLimb(xs: number[], ys: number[], pivot: number, angle: number, count: number): void {
+  const cos = Math.cos(angle)
+  const sin = Math.sin(angle)
+  const px = xs[pivot]!
+  const py = ys[pivot]!
+  for (let index = pivot + 1; index < count; index += 1) {
+    const dx = xs[index]! - px
+    const dy = ys[index]! - py
+    xs[index] = px + dx * cos - dy * sin
+    ys[index] = py + dx * sin + dy * cos
+  }
+}
+
+function solveReachCcd(
+  outX: number[],
+  outY: number[],
+  rootX: number,
+  rootY: number,
+  targetX: number,
+  targetY: number,
+  sep: ChainSpan,
+  limit: number,
+  count: number,
+  passes: number,
+): void {
+  outX[0] = rootX
+  outY[0] = rootY
+  fitBones(outX, outY, sep, count)
+  const cap = limit > 0 ? (limit * Math.PI) / 180 : 0
+  const steps = Math.min(24, Math.max(12, passes * 8))
+  for (let step = 0; step < steps; step += 1) {
+    if (Math.hypot(targetX - outX[count - 1]!, targetY - outY[count - 1]!) < 0.4) break
+    for (let joint = count - 2; joint >= 0; joint -= 1) {
+      const px = outX[joint]!
+      const py = outY[joint]!
+      const tx = outX[count - 1]! - px
+      const ty = outY[count - 1]! - py
+      const gx = targetX - px
+      const gy = targetY - py
+      const tlen = Math.hypot(tx, ty)
+      const glen = Math.hypot(gx, gy)
+      if (tlen < 1e-6 || glen < 1e-6) continue
+      let turn = wrapRad(Math.atan2(gy, gx) - Math.atan2(ty, tx))
+      if (cap && joint > 0) {
+        const base = Math.atan2(outY[joint]! - outY[joint - 1]!, outX[joint]! - outX[joint - 1]!)
+        const next = Math.atan2(outY[joint + 1]! - outY[joint]!, outX[joint + 1]! - outX[joint]!)
+        const bend = wrapRad(next + turn - base)
+        if (bend > cap) turn -= bend - cap
+        if (bend < -cap) turn -= bend + cap
+      }
+      if (Math.abs(turn) < 1e-5) continue
+      rotateLimb(outX, outY, joint, turn, count)
+    }
+    outX[0] = rootX
+    outY[0] = rootY
+  }
+}
 
 export function solveChain(
   restX: number[],
@@ -443,7 +563,7 @@ export function solveChain(
   prevY: number[],
   anchorX: number,
   anchorY: number,
-  sep: number,
+  sep: ChainSpan,
   passes: number,
   outX: number[],
   outY: number[],
@@ -457,16 +577,17 @@ export function solveChain(
   outX[0] = anchorX
   outY[0] = anchorY
   const reach = (from: number, to: number) => {
+    const len = chainBone(sep, Math.min(from, to))
     const dx = outX[to]! - outX[from]!
     const dy = outY[to]! - outY[from]!
     const d = Math.hypot(dx, dy)
     if (d < 1e-6) {
-      outX[to] = outX[from]! + sep
+      outX[to] = outX[from]! + len
       outY[to] = outY[from]!
       return
     }
-    outX[to] = outX[from]! + (dx / d) * sep
-    outY[to] = outY[from]! + (dy / d) * sep
+    outX[to] = outX[from]! + (dx / d) * len
+    outY[to] = outY[from]! + (dy / d) * len
   }
   const forward = () => {
     for (let index = 1; index < count; index += 1) reach(index - 1, index)
@@ -487,7 +608,7 @@ export function solveChainReach(
   prevY: number[],
   targetX: number,
   targetY: number,
-  sep: number,
+  sep: ChainSpan,
   passes: number,
   limit: number,
   outX: number[],
@@ -506,47 +627,56 @@ export function solveChainReach(
     outX[index] = Number.isFinite(prevX[index]) ? prevX[index]! : restX[index]!
     outY[index] = Number.isFinite(prevY[index]) ? prevY[index]! : restY[index]!
   }
-  const span = sep * (count - 1)
+  const span = chainSpanOf(sep, count)
   const rdx = targetX - rootX
   const rdy = targetY - rootY
   const dist = Math.hypot(rdx, rdy)
   if (dist > span || dist < 1e-6) {
-    const nx = dist < 1e-6 ? 1 : rdx / dist
-    const ny = dist < 1e-6 ? 0 : rdy / dist
-    for (let index = 0; index < count; index += 1) {
-      outX[index] = rootX + nx * sep * index
-      outY[index] = rootY + ny * sep * index
-    }
+    stretchChain(rootX, rootY, dist < 1e-6 ? 1 : rdx / dist, dist < 1e-6 ? 0 : rdy / dist, sep, count, outX, outY)
     return
   }
   const place = (from: number, to: number, cap: boolean) => {
+    const len = chainBone(sep, Math.min(from, to))
     let dx = outX[to]! - outX[from]!
     let dy = outY[to]! - outY[from]!
     let d = Math.hypot(dx, dy)
     if (d < 1e-6) {
-      dx = sep
+      dx = len
       dy = 0
-      d = sep
+      d = len
     }
     if (cap && limit > 0 && from > 0) {
       const px = outX[from]! - outX[from - 1]!
       const py = outY[from]! - outY[from - 1]!
       const base = Math.atan2(py, px)
       let ang = Math.atan2(dy, dx)
-      let delta = ang - base
-      if (delta > Math.PI) delta -= Math.PI * 2
-      if (delta < -Math.PI) delta += Math.PI * 2
+      let delta = wrapRad(ang - base)
       const max = (limit * Math.PI) / 180
       if (delta > max) ang = base + max
       if (delta < -max) ang = base - max
-      outX[to] = outX[from]! + Math.cos(ang) * sep
-      outY[to] = outY[from]! + Math.sin(ang) * sep
+      outX[to] = outX[from]! + Math.cos(ang) * len
+      outY[to] = outY[from]! + Math.sin(ang) * len
       return
     }
-    outX[to] = outX[from]! + (dx / d) * sep
-    outY[to] = outY[from]! + (dy / d) * sep
+    outX[to] = outX[from]! + (dx / d) * len
+    outY[to] = outY[from]! + (dy / d) * len
   }
-  const steps = Math.max(1, passes)
+  if (count <= CHAIN_CCD) {
+    solveReachCcd(outX, outY, rootX, rootY, targetX, targetY, sep, limit, count, passes)
+    if (limit <= 0) {
+      const polish = Math.max(2, passes)
+      for (let pass = 0; pass < polish; pass += 1) {
+        outX[count - 1] = targetX
+        outY[count - 1] = targetY
+        for (let index = count - 2; index >= 0; index -= 1) place(index + 1, index, false)
+        outX[0] = rootX
+        outY[0] = rootY
+        for (let index = 1; index < count; index += 1) place(index - 1, index, false)
+      }
+    }
+    return
+  }
+  const steps = limit > 0 ? Math.max(8, passes) : Math.max(1, passes)
   for (let pass = 0; pass < steps; pass += 1) {
     outX[count - 1] = targetX
     outY[count - 1] = targetY
@@ -804,7 +934,7 @@ export function parseTargetConfig(style: CSSStyleDeclaration): TargetConfig {
     lensOn: !grouped && Boolean(lensScaleRaw && lensScaleRaw !== "none"),
     bend: grouped ? 0 : optionalDeg(read(style, "--k-bend")),
     bendRadius: lengthToPx(read(style, "--k-bend-radius") || "160px"),
-    chain: grouped ? 0 : optionalPx(read(style, "--k-chain")),
+    chain: optionalPx(read(style, "--k-chain")),
     chainMode: read(style, "--k-chain-mode") === "reach" ? "reach" : "follow",
     chainLimit: optionalDeg(read(style, "--k-chain-limit")),
     chainOrient: read(style, "--k-chain-orient") === "auto" ? "auto" : "none",

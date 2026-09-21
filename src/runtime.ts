@@ -592,6 +592,7 @@ class ScopeRuntime implements KinesisScope {
   private chainOutX: number[] = []
   private chainOutY: number[] = []
   private chainOutR: number[] = []
+  private chainSep: number[] = []
   private wakeDriven = false
   private maxWake = 0
   private pointerInside = false
@@ -2122,6 +2123,7 @@ class ScopeRuntime implements KinesisScope {
       this.chainOutX.length = count
       this.chainOutY.length = count
       this.chainOutR.length = count
+      this.chainSep.length = Math.max(0, count - 1)
       for (let index = 0; index < count; index += 1) {
         const member = members[index]!
         if (!member.rect) this.measure(member)
@@ -2130,6 +2132,7 @@ class ScopeRuntime implements KinesisScope {
         this.chainRestY[index] = box ? box.top + box.height / 2 : rest0y
         this.chainPrevX[index] = member.chainX
         this.chainPrevY[index] = member.chainY
+        if (index < count - 1) this.chainSep[index] = member.config.chain || 20
       }
       if (!live) {
         if (head.config.chainOrient === "auto") {
@@ -2146,7 +2149,7 @@ class ScopeRuntime implements KinesisScope {
       this.fillAnchor(head, pointer, ctx)
       const ax = ctx.anchorX
       const ay = ctx.anchorY
-      const sep = head.config.chain || 20
+      const sep = this.chainSep
       const passes = count <= CHAIN_HQ ? 2 : 1
       if (head.config.chainMode === "reach") {
         const tip = members[count - 1]!
