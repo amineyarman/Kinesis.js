@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Kinesis global build</title>
+    <style>
+      body { margin: 0; }
+      .scene { position: absolute; left: 0; top: 0; width: 800px; height: 600px; --k-motion: instant; }
+      .layer { width: 40px; height: 40px; --k-parallax: 20px; }
+    </style>
+    <!-- The build a CDN user loads: no bundler, no init call. -->
+    <script src="/dist/kinesis.global.js"></script>
+  </head>
+  <body>
+    <section class="scene" data-kinesis><div class="layer"></div></section>
+  </body>
+</html>

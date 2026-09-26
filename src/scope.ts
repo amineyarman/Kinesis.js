@@ -356,6 +356,7 @@ export class Scope implements FrameClient {
       if (usesKinesis(style)) {
         const next = target ?? this.add(el)
         next.css = readConfig(style, (message) => warn(message, el))
+        next.cssActive = true
         next.snapshot(style)
         next.update()
         this.signatures.set(el, inlineSignature(el))
@@ -363,7 +364,9 @@ export class Scope implements FrameClient {
         changed = true
       } else if (target) {
         if (Object.keys(target.js).length || target.bindings.size) {
-          target.css = null
+          // Still read inherited context such as --k-motion.
+          target.css = readConfig(style)
+          target.cssActive = false
           target.snapshot(style)
           target.update()
         } else {
@@ -386,10 +389,10 @@ export class Scope implements FrameClient {
     for (const target of pending) {
       const style = getComputedStyle(target.el)
       target.snapshot(style)
-      if (this.discover && this.owns(target.el)) {
-        target.css = usesKinesis(style) ? readConfig(style, (message) => warn(message, target.el)) : null
-        target.update()
-      }
+      // Elements attached from JavaScript still inherit context such as --k-motion from CSS.
+      target.cssActive = usesKinesis(style)
+      target.css = readConfig(style, target.cssActive ? (message) => warn(message, target.el) : undefined)
+      target.update()
     }
     this.structureDirty = true
     this.geometryDirty = true
@@ -404,19 +407,27 @@ export class Scope implements FrameClient {
       if (usesKinesis(style)) {
         const next = readConfig(style, (message) => warn(message, el))
         if (target) {
-          if (sameConfig(target.css, next)) continue
+          if (target.cssActive && sameConfig(target.css, next)) continue
           target.css = next
+          target.cssActive = true
           target.update()
         } else {
           const created = this.add(el)
           created.css = next
+          created.cssActive = true
           created.snapshot(style)
           created.update()
           this.geometryDirty = true
         }
         this.structureDirty = true
-      } else if (target?.css && !Object.keys(target.js).length && !target.bindings.size) {
-        this.remove(target)
+      } else if (target?.cssActive) {
+        if (Object.keys(target.js).length || target.bindings.size) {
+          target.css = readConfig(style)
+          target.cssActive = false
+          target.update()
+        } else {
+          this.remove(target)
+        }
         this.structureDirty = true
       }
     }

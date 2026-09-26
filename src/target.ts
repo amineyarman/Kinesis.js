@@ -67,8 +67,10 @@ let nextId = 0
 export class Target {
   readonly id = ++nextId
   readonly el: Styled
-  /** Config resolved from CSS, or null when the element only has JavaScript props. */
+  /** Config resolved from CSS: the element's own properties plus inherited context. */
   css: Config | null = null
+  /** Whether CSS itself declares Kinesis properties on this element (not just inherited context). */
+  cssActive = false
   /** JavaScript overrides from `kinesis()` or `set()`. */
   js: Partial<Config> = {}
   config: Config = defaultConfig()
@@ -158,7 +160,7 @@ export class Target {
   }
 
   get hasConfig(): boolean {
-    return this.css !== null || Object.keys(this.js).length > 0 || this.bindings.size > 0
+    return this.cssActive || Object.keys(this.js).length > 0 || this.bindings.size > 0
   }
 
   /** Advances this target by one frame. Returns true while it still needs frames. */
