@@ -252,6 +252,10 @@ export class Scope implements FrameClient {
 
   read(): void {
     if (this.isDestroyed || this.paused) return
+    if (!this.discover) {
+      // Without a MutationObserver, release elements that have left the page here.
+      for (const target of this.list) if (!target.el.isConnected) this.remove(target)
+    }
     if (this.fullScan) {
       this.fullScan = false
       this.scans.clear()
@@ -487,6 +491,7 @@ export class Scope implements FrameClient {
       }
       const el = record.target as Element
       if (record.attributeName === "style") {
+        this.targets.get(el)?.verify()
         const signature = inlineSignature(el)
         if (signature === (this.signatures.get(el) ?? "")) continue
         this.signatures.set(el, signature)
@@ -667,8 +672,14 @@ export class Scope implements FrameClient {
         height: rect.height,
       }
     }
-    this.rootFixed = isFixed(this.root)
-    this.rootBox = box(this.root, this.rootFixed)
+    if (this.root === document.documentElement) {
+      // Elements animated from JavaScript outside any scope use the viewport as their area.
+      this.rootFixed = true
+      this.rootBox = { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight }
+    } else {
+      this.rootFixed = isFixed(this.root)
+      this.rootBox = box(this.root, this.rootFixed)
+    }
     for (const target of this.list) {
       const fixed = isFixed(target.el)
       target.measure(box(target.el, fixed), fixed)
@@ -722,7 +733,8 @@ export class Scope implements FrameClient {
   }
 
   private onKey(event: KeyboardEvent, down: boolean): void {
-    const active = document.activeElement
+    // The scope's own root node, so focus inside shadow DOM resolves to the real element.
+    const active = (this.root.getRootNode() as Document | ShadowRoot).activeElement
     if (!(active instanceof Element) || !this.root.contains(active)) return
     if (event.key === "Enter" || event.key === " ") {
       if (down && event.repeat) return

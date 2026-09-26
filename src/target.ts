@@ -343,6 +343,20 @@ export class Target {
     this.changed = true
   }
 
+  /**
+   * Frameworks sometimes replace an element's whole `style` attribute on re-render. Forget
+   * any values that were wiped so the next write puts them back.
+   */
+  verify(): void {
+    const style = this.el.style
+    for (const name of [...this.written.keys()]) {
+      if (style.getPropertyValue(name) === "") {
+        this.written.delete(name)
+        this.changed = true
+      }
+    }
+  }
+
   /** Current reaction progress, 0..1 (springs may overshoot). */
   get progress(): number {
     return this.sp.value
