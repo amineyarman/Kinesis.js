@@ -9,7 +9,7 @@ instead of container components and `data-ks-*` attributes. See the
 ### Added
 
 - **Pointer effects**: `--k-parallax`, `--k-tilt`, `--k-depth`, `--k-magnetic`, `--k-repel`,
-  `--k-follow`, `--k-look`, `--k-point`.
+  `--k-follow`, `--k-look`, `--k-point`, `--k-spin`.
 - **Reactions**: `--k-when: near | hover | press | view [once] | scroll | page` with the outputs
   `--k-x`, `--k-y`, `--k-rotate`, `--k-scale`, `--k-opacity`, `--k-blur`, `--k-color`,
   `--k-background`, plus `--k-delay` and `--k-stagger`.
@@ -18,7 +18,7 @@ instead of container components and `data-ks-*` attributes. See the
 - `--k-progress`, `--k-pointer-x`, and `--k-pointer-y`, written back so any CSS can take part.
 - Spring presets (`soft`, `smooth`, `snappy`, `bouncy`, `heavy`, `instant`) and custom springs.
 - `kinesis()` for JavaScript with `set()`, `reset()`, `bind()`, and `on()`; signals for pointer,
-  scroll, time, and your own values.
+  scroll, time, and your own values, plus per-element `near` and `pointer` signals on every handle.
 - `@amineyarman/kinesis/text` (accessible text splitting), `/audio` (audio signals), `/vue`
   (`v-kinesis` directive), `/auto`, and a `<script>` build.
 

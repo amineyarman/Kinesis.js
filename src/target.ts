@@ -1,5 +1,5 @@
 import { defaultConfig, rotates3d, usesPointer, type Config } from "./config"
-import { computeGoal, createGoal, crossing, normalizeInArea, type PointerInput } from "./effects"
+import { computeGoal, createGoal, crossing, influence, normalizeInArea, type PointerInput } from "./effects"
 import { input } from "./input"
 import { clamp, fmt, lerp, parseRotate, rotateValue, shortestAngle, splitTokens, type Quaternion } from "./math"
 import type { Signal } from "./signal"
@@ -195,6 +195,7 @@ export class Target {
       goal.ry = 0
       goal.rz = Number.NaN
       goal.near = 0
+      goal.spin = 0
     }
     if (reduce) {
       goal.x = 0
@@ -202,6 +203,7 @@ export class Target {
       goal.rx = 0
       goal.ry = 0
       goal.rz = Number.NaN
+      goal.spin = 0
     }
 
     this.sx.target = goal.x
@@ -209,8 +211,8 @@ export class Target {
     this.sz.target = c.depth
     this.srx.target = goal.rx
     this.sry.target = goal.ry
-    if (!Number.isNaN(goal.rz)) this.srz.target = this.srz.value + shortestAngle(this.srz.value, goal.rz)
-    else if (Number.isNaN(c.point) || reduce) this.srz.target = 0
+    if (!Number.isNaN(goal.rz)) this.srz.target = this.srz.value + shortestAngle(this.srz.value, goal.rz + goal.spin)
+    else if (Number.isNaN(c.point) || reduce) this.srz.target = goal.spin
 
     this.drive(env, top, goal.near)
 
@@ -357,6 +359,20 @@ export class Target {
         this.changed = true
       }
     }
+  }
+
+  /** Pointer offset from the element's resting center, in px. */
+  pointerOffset(axis: "x" | "y"): number {
+    if (axis === "x") return input.x - (this.box.left - (this.fixed ? 0 : input.scrollX) + this.box.width / 2)
+    return input.y - (this.box.top - (this.fixed ? 0 : input.scrollY) + this.box.height / 2)
+  }
+
+  /** Pointer closeness, 1 at the center and 0 at `radius`, honoring `axis`. */
+  nearness(): number {
+    if (!input.present) return 0
+    const dx = this.config.axis === "y" ? 0 : this.pointerOffset("x")
+    const dy = this.config.axis === "x" ? 0 : this.pointerOffset("y")
+    return influence(Math.hypot(dx, dy), this.config.radius)
   }
 
   /** Current reaction progress, 0..1 (springs may overshoot). */

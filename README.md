@@ -50,6 +50,7 @@ Or without a build step:
 | `--k-follow: 1` | chases the pointer |
 | `--k-look: 20deg` | turns to face the pointer (eyes, heads) |
 | `--k-point: 0deg` | rotates to point at the pointer (arrows, needles) |
+| `--k-spin: 180deg` | rotates flat as the pointer moves across (wheels, dials, limbs) |
 | `--k-depth: 40px` | sits above a tilted parent |
 | `--k-drag: both` | can be dragged, thrown, and snapped back |
 

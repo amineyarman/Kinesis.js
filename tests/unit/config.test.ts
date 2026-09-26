@@ -28,6 +28,7 @@ describe("discovery", () => {
       "--k-follow": "1",
       "--k-look": "12deg",
       "--k-point": "0deg",
+      "--k-spin": "20deg",
       "--k-depth": "40px",
       "--k-drag": "x",
       "--k-when": "view",

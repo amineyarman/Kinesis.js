@@ -183,6 +183,24 @@ test.describe("pointer effects", () => {
   })
 })
 
+test.describe("spin", () => {
+  test("spin turns with the pointer's horizontal position", async ({ page }) => {
+    await mount(page, {
+      css: `
+        [data-kinesis] { ${scope}; --k-motion: instant }
+        .wheel { width: 60px; height: 60px; --k-spin: 180deg }
+      `,
+      html: `<section data-kinesis><div class="wheel"></div></section>`,
+    })
+    await page.mouse.move(750, 350)
+    await frames(page, 3)
+    expect(await style(page, ".wheel", "rotate")).toBe("90deg")
+    await page.mouse.move(0, 350)
+    await frames(page, 3)
+    expect(await style(page, ".wheel", "rotate")).toBe("-180deg")
+  })
+})
+
 test.describe("drag", () => {
   test("drags within bounds and throws", async ({ page }) => {
     await mount(page, {
@@ -269,6 +287,28 @@ test.describe("JavaScript API", () => {
     await frames(page, 3)
     expect(await style(page, ".meter", "scale")).toBe("1.5")
     expect(await style(page, ".meter", "--level")).toBe("0.5")
+  })
+
+  test("handles expose near and pointer signals for custom motion", async ({ page }) => {
+    await mount(page, {
+      css: `[data-kinesis] { ${scope} } .hub { position: absolute; left: 200px; top: 200px; width: 100px; height: 100px }`,
+      html: `<section data-kinesis><div class="hub"></div></section>`,
+    })
+    await page.evaluate(() => {
+      const { kinesis, computed } = window.K
+      const hub = kinesis(document.querySelector(".hub")!, { radius: 100 })
+      hub.bind({
+        rotate: computed(() => (Math.atan2(hub.pointer.y.get(), hub.pointer.x.get()) * 180) / Math.PI),
+        "--near": hub.near,
+      })
+    })
+    await page.mouse.move(250, 350)
+    await frames(page, 3)
+    expect(await style(page, ".hub", "rotate")).toBe("90deg")
+    expect(Number(await style(page, ".hub", "--near"))).toBe(0)
+    await page.mouse.move(260, 250)
+    await frames(page, 3)
+    expect(Number(await style(page, ".hub", "--near"))).toBeGreaterThan(0.9)
   })
 
   test("elements outside any scope can still be animated", async ({ page }) => {

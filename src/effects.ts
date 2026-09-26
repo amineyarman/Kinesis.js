@@ -27,9 +27,11 @@ export interface SpatialGoal {
   rz: number
   /** 0..1 closeness of the pointer within `radius`. */
   near: number
+  /** Flat rotation from `spin`, added on top of `rz`. */
+  spin: number
 }
 
-export const createGoal = (): SpatialGoal => ({ x: 0, y: 0, rx: 0, ry: 0, rz: Number.NaN, near: 0 })
+export const createGoal = (): SpatialGoal => ({ x: 0, y: 0, rx: 0, ry: 0, rz: Number.NaN, near: 0, spin: 0 })
 
 const DEG = 180 / Math.PI
 
@@ -47,6 +49,7 @@ export function computeGoal(config: Config, input: PointerInput, out: SpatialGoa
   out.ry = 0
   out.rz = Number.NaN
   out.near = 0
+  out.spin = 0
   const k = config.intensity
   const onlyX = config.axis === "x"
   const onlyY = config.axis === "y"
@@ -58,6 +61,7 @@ export function computeGoal(config: Config, input: PointerInput, out: SpatialGoa
     out.y -= ay * config.parallax[1] * k
     out.ry += ax * config.tilt[0] * k
     out.rx -= ay * config.tilt[1] * k
+    out.spin = (onlyY ? input.ay : input.ax) * config.spin * k
   }
 
   if (!input.present) return out

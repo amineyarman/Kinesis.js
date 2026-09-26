@@ -28,6 +28,7 @@ export const properties: readonly PropertyDefinition[] = [
   define("--k-follow", "<number>", "0"),
   define("--k-look", "<angle>", "0deg"),
   define("--k-point", "none | <angle>", "none"),
+  define("--k-spin", "<angle>", "0deg"),
   define("--k-depth", "<length>", "0px"),
   define("--k-drag", "none | x | y | both", "none"),
 
@@ -66,6 +67,7 @@ export const triggers = [
   "--k-follow",
   "--k-look",
   "--k-point",
+  "--k-spin",
   "--k-depth",
   "--k-drag",
   "--k-when",

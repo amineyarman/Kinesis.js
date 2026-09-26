@@ -1,5 +1,5 @@
 import { configKeys, type Config, type KinesisProps } from "./config"
-import { attachInput } from "./input"
+import { attachInput, input } from "./input"
 import { registerProperties } from "./properties"
 import { Scope } from "./scope"
 import { configure, type KinesisOptions } from "./settings"
@@ -24,6 +24,10 @@ export interface KinesisTarget {
   readonly element: Element
   /** Current reaction progress (`--k-when`), as a signal. */
   readonly progress: Signal
+  /** Pointer closeness to this element: 1 at its center, 0 at `radius` (default 200px). */
+  readonly near: Signal
+  /** Pointer offset from this element's resting center, in px. */
+  readonly pointer: { x: Signal; y: Signal }
   /** Sets props from JavaScript. They override CSS until `reset()`. */
   set(props: KinesisProps): this
   /** Returns props to their CSS values. With no names, resets every JavaScript prop. */
@@ -93,8 +97,12 @@ function scopeFor(el: Element): Scope {
   return documentScope
 }
 
+const pointerLive = () => input.moved || input.scrolled
+
 class TargetHandle implements KinesisTarget {
   private signal: Signal | null = null
+  private nearSignal: Signal | null = null
+  private pointerSignals: { x: Signal; y: Signal } | null = null
 
   constructor(
     private readonly scope: Scope,
@@ -112,6 +120,21 @@ class TargetHandle implements KinesisTarget {
       () => target.animating,
     )
     return this.signal
+  }
+
+  get near(): Signal {
+    const target = this.target
+    this.nearSignal ??= source(() => target.nearness(), pointerLive)
+    return this.nearSignal
+  }
+
+  get pointer(): { x: Signal; y: Signal } {
+    const target = this.target
+    this.pointerSignals ??= {
+      x: source(() => target.pointerOffset("x"), pointerLive),
+      y: source(() => target.pointerOffset("y"), pointerLive),
+    }
+    return this.pointerSignals
   }
 
   set(props: KinesisProps): this {

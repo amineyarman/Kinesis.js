@@ -93,6 +93,15 @@ describe("pointer effects", () => {
     expect(bearing(0, 1)).toBeCloseTo(180)
   })
 
+  it("spin turns flat with horizontal position, or vertical with axis y", () => {
+    const goal = computeGoal(config({ spin: 90 }), pointerAt(0, 0, { ax: 0.5, ay: -1 }), createGoal())
+    expect(goal.spin).toBe(45)
+    const vertical = computeGoal(config({ spin: 90, axis: "y" }), pointerAt(0, 0, { ax: 0.5, ay: -1 }), createGoal())
+    expect(vertical.spin).toBe(-90)
+    const outside = computeGoal(config({ spin: 90 }), pointerAt(0, 0, { ax: 1, inArea: false }), createGoal())
+    expect(outside.spin).toBe(0)
+  })
+
   it("intensity scales everything", () => {
     const goal = computeGoal(config({ parallax: [30, 30], intensity: 0.5 }), pointerAt(0, 0, { ax: 1, ay: 0 }), createGoal())
     expect(goal.x).toBe(-15)

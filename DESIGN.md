@@ -30,7 +30,7 @@ Four families. Every CSS name has a camelCase twin in JavaScript (`--k-parallax`
 | Family | Properties |
 | --- | --- |
 | Context (inherited) | `--k-motion`, `--k-intensity`, `--k-perspective` |
-| Pointer effects | `--k-parallax`, `--k-tilt`, `--k-magnetic`, `--k-repel`, `--k-follow`, `--k-look`, `--k-point`, `--k-depth` |
+| Pointer effects | `--k-parallax`, `--k-tilt`, `--k-magnetic`, `--k-repel`, `--k-follow`, `--k-look`, `--k-point`, `--k-spin`, `--k-depth` |
 | Reactions | `--k-when` plus the outputs `--k-x`, `--k-y`, `--k-rotate`, `--k-scale`, `--k-opacity`, `--k-blur`, `--k-color`, `--k-background` |
 | Gestures | `--k-drag` |
 | Modifiers | `--k-area`, `--k-radius`, `--k-limit`, `--k-axis`, `--k-bounds`, `--k-release`, `--k-delay`, `--k-stagger`, `--k-track` |

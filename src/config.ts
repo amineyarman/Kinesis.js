@@ -22,6 +22,7 @@ export interface KinesisProps {
   follow?: number
   look?: number
   point?: number | null
+  spin?: number
   depth?: number
   drag?: DragAxis | null
   when?: When | `${When} once` | null
@@ -57,6 +58,8 @@ export interface Config {
   look: number
   /** Direction the artwork faces, like gradient angles. NaN when unset. */
   point: number
+  /** Flat rotation at the edge of the area, like turning a dial. */
+  spin: number
   depth: number
   drag: DragAxis | ""
   when: When | ""
@@ -95,6 +98,7 @@ export function defaultConfig(): Config {
     follow: 0,
     look: 0,
     point: Number.NaN,
+    spin: 0,
     depth: 0,
     drag: "",
     when: "",
@@ -145,6 +149,8 @@ export function usesKinesis(style: CSSStyleDeclaration): boolean {
   if (!unset(look, "0deg") && nonZero(look)) return true
   const depth = read(style, "--k-depth")
   if (!unset(depth, "0px") && nonZero(depth)) return true
+  const spin = read(style, "--k-spin")
+  if (!unset(spin, "0deg") && nonZero(spin)) return true
   return (
     !unset(read(style, "--k-point"), "none") ||
     !unset(read(style, "--k-drag"), "none") ||
@@ -220,6 +226,7 @@ export function readConfig(style: CSSStyleDeclaration, warn?: (message: string) 
   config.look = parseAngle(read(style, "--k-look") || "0")
   const point = read(style, "--k-point")
   config.point = unset(point, "none") ? Number.NaN : parseAngle(point)
+  config.spin = parseAngle(read(style, "--k-spin") || "0")
   config.depth = length(read(style, "--k-depth") || "0")
   config.drag = oneOf(read(style, "--k-drag"), ["x", "y", "both"] as const, "")
   Object.assign(config, whenFrom(read(style, "--k-when"), warn))
@@ -272,6 +279,7 @@ export function propsToConfig(props: KinesisProps): Partial<Config> {
   if (has("follow")) out.follow = props.follow ?? 0
   if (has("look")) out.look = props.look ?? 0
   if (has("point")) out.point = props.point ?? Number.NaN
+  if (has("spin")) out.spin = props.spin ?? 0
   if (has("depth")) out.depth = props.depth ?? 0
   if (has("drag")) out.drag = props.drag ?? ""
   if (has("when")) Object.assign(out, whenFrom(props.when ?? "none"))
@@ -320,6 +328,7 @@ export const usesPointer = (config: Config): boolean =>
   config.follow !== 0 ||
   config.look !== 0 ||
   !Number.isNaN(config.point) ||
+  config.spin !== 0 ||
   config.when === "near" ||
   config.when === "hover" ||
   config.track
