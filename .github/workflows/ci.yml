@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [v2, master, main]
+    branches: [next, v2, master, main]
   pull_request:
 
 jobs:
@@ -15,5 +15,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npx tsc --noEmit
+      - run: npm run typecheck
       - run: npm test
+      - run: npm run build
+      - run: npm run size
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser

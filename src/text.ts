@@ -1,175 +1,149 @@
-export type TextUnit = "chars" | "words" | "lines"
+export type SplitBy = "chars" | "words" | "lines"
 
-export interface TextBinding {
-  refresh(): void
-  destroy(): void
+export interface SplitResult {
+  readonly element: HTMLElement
+  chars: HTMLElement[]
+  words: HTMLElement[]
+  lines: HTMLElement[]
+  /** Restores the original content. */
+  revert(): void
 }
 
-const UNITS = new Set<TextUnit>(["chars", "words", "lines"])
+const HIDDEN =
+  "position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0"
+const results = new WeakMap<HTMLElement, SplitResult>()
 
-function reduced(): boolean {
-  return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches
+type Segmenter = { segment(input: string): Iterable<{ segment: string }> }
+let segmenter: Segmenter | null | undefined
+
+function graphemes(text: string): string[] {
+  if (segmenter === undefined) {
+    const Ctor = (Intl as unknown as { Segmenter?: new (locale?: string, options?: object) => Segmenter }).Segmenter
+    segmenter = Ctor ? new Ctor(undefined, { granularity: "grapheme" }) : null
+  }
+  return segmenter ? Array.from(segmenter.segment(text), (part) => part.segment) : Array.from(text)
 }
 
-function unitOf(style: CSSStyleDeclaration): TextUnit | "" {
-  const value = style.getPropertyValue("--k-text").trim()
-  return UNITS.has(value as TextUnit) ? (value as TextUnit) : ""
-}
-
-function wrap(text: string): HTMLElement {
+function unit(className: string, index: number): HTMLElement {
   const span = document.createElement("span")
-  span.dataset.kUnit = ""
-  span.setAttribute("aria-hidden", "true")
-  span.textContent = text === " " ? "\u00a0" : text
+  span.className = className
+  span.style.display = "inline-block"
+  span.style.setProperty("--k-index", String(index))
   return span
 }
 
-function sourceText(element: HTMLElement): string {
-  return element.dataset.kSourceText ?? element.textContent ?? ""
-}
+/**
+ * Wraps words or characters in spans so each can be animated, for example with
+ * `.k-char { --k-when: view; --k-y: 0.6em 0; --k-stagger: 30ms }`.
+ *
+ * Screen readers keep reading the original text: every split text run is paired with a
+ * visually hidden copy, and the animated spans are `aria-hidden`. Links and emphasis inside
+ * the element keep their semantics.
+ */
+export function splitText(target: string | HTMLElement, by: SplitBy = "chars"): SplitResult {
+  const el = typeof target === "string" ? document.querySelector<HTMLElement>(target) : target
+  if (!el) throw new TypeError(`splitText() could not find ${String(target)}`)
+  results.get(el)?.revert()
 
-function restore(element: HTMLElement): void {
-  const text = element.dataset.kSourceText
-  if (text == null) return
-  element.replaceChildren(document.createTextNode(text))
-}
+  const original = Array.from(el.childNodes, (node) => node.cloneNode(true))
+  const chars: HTMLElement[] = []
+  const words: HTMLElement[] = []
+  const runs: HTMLElement[] = []
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+  const texts: Text[] = []
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if ((node as Text).data.trim()) texts.push(node as Text)
+  }
 
-function splitChars(element: HTMLElement, text: string): HTMLElement[] {
-  const nodes: HTMLElement[] = []
-  for (const char of text) {
-    if (!char.trim() && char !== " ") {
-      element.append(char)
-      continue
+  for (const text of texts) {
+    const hidden = document.createElement("span")
+    hidden.className = "k-sr"
+    hidden.style.cssText = HIDDEN
+    hidden.textContent = text.data
+    const visual = document.createElement("span")
+    visual.setAttribute("aria-hidden", "true")
+    for (const part of text.data.split(/(\s+)/)) {
+      if (!part) continue
+      if (/^\s+$/.test(part)) {
+        visual.append(part)
+        continue
+      }
+      const word = unit("k-word", words.length)
+      words.push(word)
+      if (by === "chars") {
+        for (const grapheme of graphemes(part)) {
+          const char = unit("k-char", chars.length)
+          char.textContent = grapheme
+          chars.push(char)
+          word.append(char)
+        }
+      } else {
+        word.textContent = part
+      }
+      visual.append(word)
     }
-    const node = wrap(char)
-    element.append(node)
-    nodes.push(node)
+    runs.push(visual)
+    text.replaceWith(hidden, visual)
   }
-  return nodes
-}
 
-function splitWords(element: HTMLElement, text: string): HTMLElement[] {
-  const nodes: HTMLElement[] = []
-  text.split(/(\s+)/).forEach((part) => {
-    if (!part) return
-    if (/^\s+$/.test(part)) {
-      element.append(part)
-      return
+  const lines: HTMLElement[] = []
+  let observer: ResizeObserver | undefined
+  if (by === "lines") {
+    if (runs.length === 1 && el.children.length === 2) {
+      groupLines(runs[0]!, words, lines)
+      let width = el.clientWidth
+      if (typeof ResizeObserver !== "undefined") {
+        observer = new ResizeObserver(() => {
+          if (el.clientWidth === width) return
+          width = el.clientWidth
+          requestAnimationFrame(() => splitText(el, "lines"))
+        })
+        observer.observe(el)
+      }
+    } else if (typeof console !== "undefined") {
+      console.warn("[kinesis] splitText(..., 'lines') needs plain text; splitting into words instead", el)
     }
-    const node = wrap(part)
-    element.append(node)
-    nodes.push(node)
-  })
-  return nodes
-}
-
-function splitLines(element: HTMLElement, text: string): HTMLElement[] {
-  const words = splitWords(element, text)
-  if (words.length < 2) return words
-  const lines: string[] = []
-  let current = ""
-  let top = Number.NaN
-  words.forEach((word, index) => {
-    const box = word.getBoundingClientRect()
-    if (!Number.isFinite(top)) top = box.top
-    if (Math.abs(box.top - top) > 1 && current) {
-      lines.push(current)
-      current = word.textContent ?? ""
-      top = box.top
-    } else {
-      current += (current && !current.endsWith(" ") ? " " : "") + (word.textContent ?? "")
-    }
-    if (index === words.length - 1 && current) lines.push(current)
-  })
-  element.replaceChildren()
-  return lines.map((line) => {
-    const node = wrap(line)
-    element.append(node)
-    return node
-  })
-}
-
-export function splitText(element: HTMLElement, units: TextUnit = "chars"): HTMLElement[] {
-  if (typeof document === "undefined") return []
-  const text = sourceText(element)
-  if (!element.dataset.kSourceText) element.dataset.kSourceText = text
-  if (!element.getAttribute("aria-label") && !element.getAttribute("aria-labelledby")) {
-    const name = text.replace(/\s+/g, " ").trim()
-    if (name) element.setAttribute("aria-label", name)
-  }
-  restore(element)
-  element.dataset.kText = units
-  element.replaceChildren()
-  if (units === "words") return splitWords(element, text)
-  if (units === "lines") return splitLines(element, text)
-  const nodes = splitChars(element, text)
-  if (nodes.length > 150) {
-    console.warn(`@kinesisjs/text: ${nodes.length} character units. Keep interactive groups near 150.`)
-  }
-  return nodes
-}
-
-function hostsOf(root: ParentNode): HTMLElement[] {
-  const origins: Element[] = []
-  if (root instanceof Element) origins.push(root)
-  if ("querySelectorAll" in root) {
-    root.querySelectorAll("[data-kinesis]").forEach((node) => origins.push(node))
-  }
-  if (!origins.length && root instanceof Document && root.body) origins.push(root.body)
-  const seen = new Set<HTMLElement>()
-  origins.forEach((origin) => {
-    if (origin instanceof HTMLElement && unitOf(getComputedStyle(origin))) seen.add(origin)
-    origin.querySelectorAll<HTMLElement>("*").forEach((node) => {
-      if (unitOf(getComputedStyle(node))) seen.add(node)
-    })
-  })
-  return Array.from(seen)
-}
-
-export function bindText(root?: ParentNode | { root: HTMLElement; refresh?(): void }): TextBinding {
-  if (typeof document === "undefined") {
-    return { refresh() {}, destroy() {} }
-  }
-  root = root ?? document
-  const node = "root" in root ? root.root : root
-  const refreshScene = "refresh" in root ? root.refresh : undefined
-  const observed = new Map<HTMLElement, ResizeObserver>()
-
-  const apply = (element: HTMLElement) => {
-    const units = unitOf(getComputedStyle(element))
-    if (!units) return
-    if (reduced()) {
-      if (element.dataset.kText) restore(element)
-      return
-    }
-    splitText(element, units)
-    if (units !== "lines") return
-    if (observed.has(element)) return
-    const ro = new ResizeObserver(() => {
-      splitText(element, "lines")
-      refreshScene?.()
-    })
-    ro.observe(element)
-    observed.set(element, ro)
   }
 
-  const refresh = () => {
-    if (typeof document === "undefined") return
-    hostsOf(node).forEach(apply)
-    refreshScene?.()
-  }
-
-  refresh()
-
-  return {
-    refresh,
-    destroy() {
-      observed.forEach((ro, element) => {
-        ro.disconnect()
-        restore(element)
-        delete element.dataset.kText
-      })
-      observed.clear()
+  const result: SplitResult = {
+    element: el,
+    chars,
+    words,
+    lines,
+    revert() {
+      observer?.disconnect()
+      el.replaceChildren(...original)
+      results.delete(el)
     },
   }
+  results.set(el, result)
+  return result
+}
+
+function groupLines(run: HTMLElement, words: HTMLElement[], lines: HTMLElement[]): void {
+  const tops = words.map((word) => word.offsetTop)
+  run.replaceChildren()
+  let line: HTMLElement | null = null
+  let top = Number.NaN
+  words.forEach((word, index) => {
+    const wordTop = tops[index]!
+    if (!line || Math.abs(wordTop - top) > 2) {
+      line = unit("k-line", lines.length)
+      line.style.display = "block"
+      lines.push(line)
+      run.append(line)
+      top = wordTop
+    } else {
+      line.append(" ")
+    }
+    line.append(word)
+  })
+}
+
+/** Splits every element with a `data-k-split` attribute ("chars", "words", or "lines"). */
+export function splitAll(root: ParentNode = document): SplitResult[] {
+  return Array.from(root.querySelectorAll<HTMLElement>("[data-k-split]"), (el) => {
+    const by = el.dataset.kSplit as SplitBy
+    return splitText(el, by === "words" || by === "lines" ? by : "chars")
+  })
 }

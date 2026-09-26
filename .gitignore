@@ -25,3 +25,6 @@ dist-ssr
 *.sln
 *.sw?
 notes
+# Browser tests
+test-results
+playwright-report

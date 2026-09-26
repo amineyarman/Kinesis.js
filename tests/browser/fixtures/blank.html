@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Kinesis fixture</title>
+    <style>
+      body { margin: 0; font: 16px/1.4 system-ui, sans-serif; }
+    </style>
+  </head>
+  <body>
+    <script type="module">
+      import * as K from "/src/index.ts"
+      import * as T from "/src/text.ts"
+      window.K = K
+      window.T = T
+      window.ready = true
+    </script>
+  </body>
+</html>

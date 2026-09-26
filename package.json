@@ -1,32 +1,55 @@
 {
   "name": "@amineyarman/kinesis",
   "version": "2.0.0",
-  "description": "CSS-native reactive motion for the web.",
-  "main": "dist/kinesis.umd.js",
-  "module": "dist/kinesis.es.js",
-  "types": "dist/index.d.ts",
+  "description": "Interactive motion for the web. Declare how elements react to the pointer, scroll, and touch in CSS or JavaScript.",
+  "type": "module",
+  "sideEffects": [
+    "./dist/auto.js",
+    "./dist/kinesis.global.js"
+  ],
+  "main": "./dist/kinesis.js",
+  "module": "./dist/kinesis.js",
+  "types": "./dist/index.d.ts",
+  "unpkg": "./dist/kinesis.global.js",
+  "jsdelivr": "./dist/kinesis.global.js",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/kinesis.es.js",
-      "require": "./dist/kinesis.umd.js"
+      "import": "./dist/kinesis.js"
     },
     "./text": {
       "types": "./dist/text.d.ts",
-      "import": "./src/text.ts",
-      "default": "./src/text.ts"
-    }
+      "import": "./dist/text.js"
+    },
+    "./audio": {
+      "types": "./dist/audio.d.ts",
+      "import": "./dist/audio.js"
+    },
+    "./vue": {
+      "types": "./dist/vue.d.ts",
+      "import": "./dist/vue.js"
+    },
+    "./auto": {
+      "types": "./dist/auto.d.ts",
+      "import": "./dist/auto.js"
+    },
+    "./global": "./dist/kinesis.global.js",
+    "./package.json": "./package.json"
   },
   "files": [
     "dist"
   ],
   "keywords": [
-    "kinesis",
+    "animation",
+    "interaction",
     "motion",
     "css",
-    "interaction",
     "parallax",
-    "tilt"
+    "tilt",
+    "magnetic",
+    "spring",
+    "drag",
+    "scroll"
   ],
   "author": "Amine Bouyarmane",
   "license": "MIT",
@@ -34,14 +57,17 @@
     "type": "git",
     "url": "https://github.com/amineyarman/Kinesis.js"
   },
+  "homepage": "https://kinesisjs.com",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build && tsc",
-    "preview": "vite preview",
+    "dev": "vite --port 5173",
+    "build": "vite build && vite build --config vite.global.config.ts && tsc -p tsconfig.build.json",
     "test": "vitest run",
-    "bench": "vitest bench --run"
+    "test:browser": "playwright test",
+    "typecheck": "tsc --noEmit",
+    "size": "node scripts/size.mjs"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@types/node": "^22.5.5",
     "typescript": "^5.5.3",
     "vite": "^5.4.1",

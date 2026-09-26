@@ -1,321 +1,108 @@
-import { clamp } from "./core"
-import { KSignal } from "./signal"
+import { frame, wake } from "./frame"
+import { clamp } from "./math"
+import { source, type Signal } from "./signal"
 
-export const audioBands = {
-  volume: [20, 16000],
-  bass: [20, 140],
-  "low-mid": [140, 400],
-  mid: [400, 2000],
-  "high-mid": [2000, 6000],
-  treble: [6000, 16000],
-} as const
-
-const audioBandNames = Object.keys(audioBands) as (keyof typeof audioBands)[]
-
-export type AudioBandName = keyof typeof audioBands | "peak"
-
-export type AudioSourceInput =
-  | string
-  | HTMLMediaElement
-  | MediaStream
-  | AudioNode
-  | AnalyserNode
-
-export function hzToBin(hz: number, sampleRate: number, fftSize: number): number {
-  const nyquist = fftSize / 2
-  return clamp(Math.round((hz * fftSize) / sampleRate), 0, nyquist)
+export interface AudioOptions {
+  /** Reuse an existing context. */
+  context?: AudioContext
+  /** Analyser resolution. Default 1024. */
+  fftSize?: number
+  /** Analyser smoothing, 0..1. Default 0.75. */
+  smoothing?: number
 }
 
-export function bandEnergy(data: Uint8Array, fromBin: number, toBin: number): number {
-  const start = Math.min(fromBin, toBin)
-  const end = Math.max(fromBin, toBin)
-  let sum = 0
-  let count = 0
-  for (let index = start; index <= end && index < data.length; index += 1) {
-    sum += data[index] ?? 0
-    count += 1
-  }
-  return count ? sum / count / 255 : 0
+export interface AudioSignals {
+  /** Overall loudness, 0..1. */
+  volume: Signal
+  /** 20–250 Hz, 0..1. */
+  bass: Signal
+  /** 250 Hz–2 kHz, 0..1. */
+  mid: Signal
+  /** 2–16 kHz, 0..1. */
+  treble: Signal
+  /** Energy in any frequency range, 0..1. */
+  band(fromHz: number, toHz: number): Signal
+  readonly context: AudioContext
+  /** Browsers start audio suspended; call from a click if sound was started programmatically. */
+  resume(): Promise<void>
+  destroy(): void
 }
 
-export function peakEnergy(data: Uint8Array): number {
-  let max = 0
-  for (let index = 0; index < data.length; index += 1) {
-    max = Math.max(max, data[index] ?? 0)
-  }
-  return max / 255
-}
+const mediaNodes = new WeakMap<HTMLMediaElement, MediaElementAudioSourceNode>()
 
-export function resolveBand(name: string): Exclude<AudioBandName, "peak"> | "peak" | "none" {
-  const key = name.trim().toLowerCase()
-  if (key === "peak") return "peak"
-  if (key === "lowmid") return "low-mid"
-  if (key === "highmid") return "high-mid"
-  if (key in audioBands) return key as Exclude<AudioBandName, "peak">
-  return "none"
-}
+/**
+ * Turns an `<audio>`/`<video>` element, a MediaStream, or any AudioNode into signals.
+ *
+ * ```js
+ * const audio = createAudio(document.querySelector("audio"))
+ * kinesis(".speaker").bind({ scale: audio.bass.map([0, 1], [1, 1.4]) })
+ * ```
+ */
+export function createAudio(input: HTMLMediaElement | MediaStream | AudioNode, options: AudioOptions = {}): AudioSignals {
+  const owned = !options.context && !(input instanceof AudioNode)
+  const context =
+    options.context ?? (input instanceof AudioNode ? (input.context as AudioContext) : new AudioContext())
+  const analyser = context.createAnalyser()
+  analyser.fftSize = options.fftSize ?? 1024
+  analyser.smoothingTimeConstant = options.smoothing ?? 0.75
 
-export class KinesisAudio {
-  volume: KSignal
-  bass: KSignal
-  lowMid: KSignal
-  mid: KSignal
-  highMid: KSignal
-  treble: KSignal
-  peak: KSignal
-  beat: KSignal
-  private context: AudioContext | undefined
-  private analyser: AnalyserNode | undefined
-  private sourceNode: AudioNode | undefined
-  private media: HTMLMediaElement | undefined
-  private stream: MediaStream | undefined
-  private bins = new Uint8Array(0)
-  private bandSpans: Array<readonly [keyof typeof audioBands, number, number]> = []
-  private levels: Record<string, number> = {
-    volume: 0,
-    bass: 0,
-    "low-mid": 0,
-    mid: 0,
-    "high-mid": 0,
-    treble: 0,
-    peak: 0,
-    beat: 0,
-  }
-  private previousVolume = 0
-  private silentFrames = 0
-  private connected = false
-  private ownsDestination = false
-  private ownsContext = false
-  private ownsMedia = false
-  private unbind: Array<() => void> = []
-  private onActivity: (() => void) | undefined
-
-  constructor(source?: AudioSourceInput, onActivity?: () => void) {
-    this.onActivity = onActivity
-    this.volume = new KSignal(() => this.levels.volume ?? 0)
-    this.bass = new KSignal(() => this.levels.bass ?? 0)
-    this.lowMid = new KSignal(() => this.levels["low-mid"] ?? 0)
-    this.mid = new KSignal(() => this.levels.mid ?? 0)
-    this.highMid = new KSignal(() => this.levels["high-mid"] ?? 0)
-    this.treble = new KSignal(() => this.levels.treble ?? 0)
-    this.peak = new KSignal(() => this.levels.peak ?? 0)
-    this.beat = new KSignal(() => this.levels.beat ?? 0)
-    if (source !== undefined) this.connect(source)
-  }
-
-  get active(): boolean {
-    if (this.media && this.media.paused) return false
-    return this.connected && this.silentFrames < 12
-  }
-
-  connect(source: AudioSourceInput): this {
-    if (typeof window === "undefined") return this
-    this.releaseOwnedMedia()
-    this.disconnectGraph()
-    this.ownsMedia = false
-    const resolved = this.resolveSource(source)
-    if (typeof source === "string" && !(resolved instanceof HTMLMediaElement && document.contains(resolved))) {
-      this.ownsMedia = resolved instanceof HTMLMediaElement
+  let node: AudioNode
+  const cleanups: Array<() => void> = []
+  if (input instanceof HTMLMediaElement) {
+    let media = mediaNodes.get(input)
+    if (!media) {
+      media = context.createMediaElementSource(input)
+      mediaNodes.set(input, media)
+      media.connect(context.destination)
     }
-
-    if (resolved instanceof AnalyserNode) {
-      this.analyser = resolved
-      this.context = resolved.context as AudioContext
-      this.ownsContext = false
-      this.bins = new Uint8Array(this.analyser.frequencyBinCount)
-      this.cacheBands()
-      this.connected = true
-      this.wake()
-      return this
+    node = media
+    const onPlay = () => {
+      void context.resume()
+      wake()
     }
+    input.addEventListener("play", onPlay)
+    cleanups.push(() => input.removeEventListener("play", onPlay))
+  } else if (input instanceof MediaStream) {
+    node = context.createMediaStreamSource(input)
+  } else {
+    node = input
+  }
+  node.connect(analyser)
 
-    if (!this.context) {
-      this.context = new AudioContext()
-      this.ownsContext = true
-    }
-    this.analyser = this.context.createAnalyser()
-    this.analyser.fftSize = 2048
-    this.analyser.smoothingTimeConstant = 0.8
-    this.bins = new Uint8Array(this.analyser.frequencyBinCount)
-    this.cacheBands()
+  const bins = new Uint8Array(analyser.frequencyBinCount)
+  let sampledAt = -1
+  const sample = () => {
+    if (sampledAt === frame.id) return
+    sampledAt = frame.id
+    analyser.getByteFrequencyData(bins)
+  }
+  const playing = () =>
+    input instanceof HTMLMediaElement ? !input.paused && !input.ended : context.state === "running"
+  const toBin = (hz: number) => clamp(Math.round((hz / (context.sampleRate / 2)) * bins.length), 0, bins.length - 1)
 
-    if (resolved instanceof AudioNode) {
-      this.sourceNode = resolved
-      this.sourceNode.connect(this.analyser)
-      this.connected = true
-      this.wake()
-      return this
-    }
-
-    if (resolved instanceof MediaStream) {
-      this.stream = resolved
-      this.sourceNode = this.context.createMediaStreamSource(resolved)
-      this.sourceNode.connect(this.analyser)
-      this.connected = true
-      this.wake()
-      return this
-    }
-
-    this.media = resolved
-    this.sourceNode = this.context.createMediaElementSource(resolved)
-    this.sourceNode.connect(this.analyser)
-    this.analyser.connect(this.context.destination)
-    this.ownsDestination = true
-    const kick = () => {
-      void this.context?.resume()
-      this.wake()
-    }
-    resolved.addEventListener("play", kick)
-    resolved.addEventListener("playing", kick)
-    resolved.addEventListener("pause", kick)
-    this.unbind.push(() => {
-      resolved.removeEventListener("play", kick)
-      resolved.removeEventListener("playing", kick)
-      resolved.removeEventListener("pause", kick)
-    })
-    this.connected = true
-    if (!resolved.paused) kick()
-    return this
+  const band = (fromHz: number, toHz: number): Signal => {
+    const from = toBin(fromHz)
+    const to = Math.max(from, toBin(toHz))
+    return source(() => {
+      sample()
+      let sum = 0
+      for (let index = from; index <= to; index += 1) sum += bins[index]!
+      return sum / ((to - from + 1) * 255)
+    }, playing)
   }
 
-  async microphone(): Promise<this> {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    return this.connect(stream)
-  }
-
-  frequency(hz: number): KSignal {
-    return new KSignal(() => {
-      if (!this.analyser) return 0
-      const bin = hzToBin(hz, this.analyser.context.sampleRate, this.analyser.fftSize)
-      return (this.bins[bin] ?? 0) / 255
-    })
-  }
-
-  bin(index: number): KSignal {
-    return new KSignal(() => (this.bins[index] ?? 0) / 255)
-  }
-
-  range(fromHz: number, toHz: number): KSignal {
-    return new KSignal(() => {
-      if (!this.analyser) return 0
-      const from = hzToBin(fromHz, this.analyser.context.sampleRate, this.analyser.fftSize)
-      const to = hzToBin(toHz, this.analyser.context.sampleRate, this.analyser.fftSize)
-      return bandEnergy(this.bins, from, to)
-    })
-  }
-
-  level(band: string): number {
-    const resolved = resolveBand(band)
-    if (resolved === "none") return 0
-    return this.levels[resolved] ?? 0
-  }
-
-  binLevel(index: number): number {
-    return (this.bins[index] ?? 0) / 255
-  }
-
-  get mediaElement(): HTMLMediaElement | undefined {
-    return this.media
-  }
-
-  get paused(): boolean {
-    return !this.media || this.media.paused
-  }
-
-  play(): Promise<void> | undefined {
-    void this.context?.resume()
-    return this.media?.play()
-  }
-
-  stop(): void {
-    if (!this.media) return
-    this.media.pause()
-    this.media.currentTime = 0
-  }
-
-  sample(): boolean {
-    if (!this.analyser || !this.connected) return false
-    if (this.media?.paused) return false
-    this.analyser.getByteFrequencyData(this.bins)
-    const spans = this.bandSpans
-    for (let index = 0; index < spans.length; index += 1) {
-      const span = spans[index]
-      if (!span) continue
-      this.levels[span[0]] = bandEnergy(this.bins, span[1], span[2])
-    }
-    this.levels.peak = peakEnergy(this.bins)
-    const volume = this.levels.volume ?? 0
-    this.levels.beat = volume - this.previousVolume > 0.12 ? 1 : (this.levels.beat ?? 0) * 0.72
-    this.previousVolume = volume
-    if (volume < 0.02) this.silentFrames += 1
-    else this.silentFrames = 0
-    if (this.active) this.wake()
-    return this.active
-  }
-
-  destroy(): void {
-    this.disconnectGraph()
-    this.unbind.forEach((fn) => fn())
-    this.unbind = []
-    this.releaseOwnedMedia()
-    if (this.stream) {
-      this.stream.getTracks().forEach((track) => track.stop())
-      this.stream = undefined
-    }
-    if (this.ownsContext) void this.context?.close()
-    this.context = undefined
-    this.connected = false
-  }
-
-  private releaseOwnedMedia(): void {
-    if (!this.ownsMedia || !this.media) return
-    this.media.pause()
-    this.media.removeAttribute("src")
-    this.media.load()
-    this.ownsMedia = false
-    this.media = undefined
-  }
-
-  private cacheBands(): void {
-    if (!this.analyser) return
-    const sampleRate = this.analyser.context.sampleRate
-    const fftSize = this.analyser.fftSize
-    this.bandSpans = audioBandNames.map((name) => {
-      const [fromHz, toHz] = audioBands[name]
-      return [name, hzToBin(fromHz, sampleRate, fftSize), hzToBin(toHz, sampleRate, fftSize)] as const
-    })
-  }
-
-  private wake(): void {
-    this.silentFrames = 0
-    this.onActivity?.()
-  }
-
-  private resolveSource(source: AudioSourceInput): HTMLMediaElement | MediaStream | AudioNode | AnalyserNode {
-    if (typeof source === "string") {
-      const element = document.querySelector(source)
-      if (element instanceof HTMLMediaElement) return element
-      const media = new Audio(source)
-      media.crossOrigin = "anonymous"
-      media.preload = "auto"
-      return media
-    }
-    return source
-  }
-
-  private disconnectGraph(): void {
-    this.unbind.forEach((fn) => fn())
-    this.unbind = []
-    try {
-      this.sourceNode?.disconnect()
-      if (this.ownsDestination) this.analyser?.disconnect()
-    } catch {
-      undefined
-    }
-    this.sourceNode = undefined
-    this.analyser = undefined
-    this.media = undefined
-    this.ownsDestination = false
-    this.connected = false
+  return {
+    volume: band(20, 16000),
+    bass: band(20, 250),
+    mid: band(250, 2000),
+    treble: band(2000, 16000),
+    band,
+    context,
+    resume: () => context.resume(),
+    destroy() {
+      for (const fn of cleanups) fn()
+      node.disconnect(analyser)
+      if (owned && !(input instanceof HTMLMediaElement)) void context.close()
+    },
   }
 }

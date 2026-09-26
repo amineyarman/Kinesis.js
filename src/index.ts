@@ -1,84 +1,33 @@
-export { initKinesis, createKinesis, getKinesis } from "./runtime"
+export { createKinesis, initKinesis, kinesis, refresh } from "./api"
 export type {
+  Bindings,
+  DragDetail,
   KinesisApp,
+  KinesisEvent,
   KinesisScope,
-  CreateKinesisOptions,
-  MotionHandle,
-  PointerSignals,
-  OrientationSignals,
-  ProximitySignals,
-  ViewSignals,
-  PressSignals,
-  HoldSignals,
-  TapSignals,
-  ScrollSignals,
-  GroupHandle,
-  FieldHandle,
-  FieldOptions,
-  FieldForce,
-  FieldShape,
-  FalloffName,
-  PathOptions,
-} from "./runtime"
-export {
-  fieldFalloff,
-  falloffId,
-  evaluateCircle,
-  evaluateElement,
-  evaluateField,
-  SpatialHash,
-} from "./field"
-export type { FieldSample } from "./field"
-export { KSignal } from "./signal"
-export { KinesisAudio, audioBands, bandEnergy, hzToBin, peakEnergy, resolveBand } from "./audio"
-export type { AudioBandName, AudioSourceInput } from "./audio"
-export { computeEdge, createEdgeSample } from "./edge"
-export type { EdgeSample } from "./edge"
-export { constrainDrag, parseDrag, resolveDragAxis } from "./drag"
-export { holdProgress, decayImpulse, resolveRelease, HOLD_DEFAULT } from "./press"
-export type { GestureRelease } from "./press"
-export type { DragBox } from "./drag"
-export { KinesisVideo } from "./video"
-export type { VideoSourceInput } from "./video"
-export {
-  cssProperties,
-  cssPropertyMap,
-  catalogProperties,
-  motionPresets,
-  defaultMotionPreset,
-  getMotionPreset,
-  kinesisRegistry,
-  kinesisRegistryMap,
-  registryLanes,
-  getRegistryEntry,
-  registryLane,
-  publicShipInteractions,
-  registryByLane,
-  responseChannels,
-  responseChannelMap,
-  getResponseChannel,
-  admissionRecords,
-  admissionRecordMap,
-  getAdmissionRecord,
-  admissionReady,
-} from "./spec"
+  KinesisTarget,
+  KinesisTargets,
+} from "./api"
 export type {
-  CssPropertySpec,
-  MotionPresetSpec,
-  PreviewKind,
-  PropertyCategory,
-  PropertyStatus,
-  KinesisKind,
-  KinesisStatus,
-  RegistryEntry,
-  RegistryLane,
-  RegistryOwner,
-  ResponseChannel,
-  ResponseCost,
-  ResponseDomain,
-  AdmissionRecord,
-  AdmissionGates,
-  AdmissionVerdict,
-} from "./spec"
-export { parseColor, lerpColor, serializeColor, composeFilter, rgbToOklab } from "./color"
-export type { Color } from "./color"
+  Area,
+  Axis,
+  Bounds,
+  ColorRange,
+  DragAxis,
+  KinesisProps,
+  Range,
+  Release,
+  When,
+} from "./config"
+export { requestOrientation } from "./input"
+export { properties } from "./properties"
+export type { PropertyDefinition } from "./properties"
+export { configure } from "./settings"
+export type { KinesisOptions, ReducedMotion } from "./settings"
+export { computed, pointer, scroll, Signal, time, value } from "./signal"
+export type { MapOptions, ValueSignal } from "./signal"
+export { presets } from "./spring"
+export type { MotionPreset, SpringOptions } from "./spring"
+export type { Channel } from "./target"
+
+export const version = "2.0.0"
