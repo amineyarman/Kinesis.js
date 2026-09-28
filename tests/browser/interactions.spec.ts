@@ -81,6 +81,35 @@ test.describe("reactions", () => {
     expect(await style(page, ".reveal", "opacity")).toBe("1")
   })
 
+  test("page progress follows the document when its height changes", async ({ page }) => {
+    await mount(page, {
+      css: `
+        .content { height: 3000px }
+        .bar { position: fixed; --k-when: page; --k-motion: instant }
+      `,
+      html: `<section data-kinesis><div class="bar"></div><div class="content"></div></section>`,
+    })
+    const expected = () =>
+      page.evaluate(() => window.scrollY / (document.documentElement.scrollHeight - window.innerHeight))
+    await page.evaluate(() => window.scrollTo(0, 600))
+    await page.waitForTimeout(100)
+    await frames(page, 3)
+    expect(Number(await style(page, ".bar", "--k-progress"))).toBeCloseTo(await expected(), 3)
+
+    // Content grows without any scrolling or resizing: progress must drop to match.
+    await page.evaluate(() => ((document.querySelector(".content") as HTMLElement).style.height = "6000px"))
+    await page.waitForTimeout(100)
+    await frames(page, 3)
+    expect(Number(await style(page, ".bar", "--k-progress"))).toBeCloseTo(await expected(), 3)
+
+    // And content that shrinks while scrolling.
+    await page.evaluate(() => ((document.querySelector(".content") as HTMLElement).style.height = "2000px"))
+    await page.evaluate(() => window.scrollTo(0, 500))
+    await page.waitForTimeout(100)
+    await frames(page, 3)
+    expect(Number(await style(page, ".bar", "--k-progress"))).toBeCloseTo(await expected(), 3)
+  })
+
   test("stagger delays siblings in order", async ({ page }) => {
     await mount(page, {
       css: `

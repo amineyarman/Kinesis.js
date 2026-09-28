@@ -76,6 +76,8 @@ const onScroll: Listener = (event) => {
   const target = event.target
   if (target === document || target === document.documentElement || target === window) {
     rawScrolled = true
+    // Content may have changed height since the last read; re-read it with this frame.
+    input.scrollMaxDirty = true
     wake()
     return
   }
@@ -115,6 +117,15 @@ export function attachInput(): void {
   document.addEventListener("scroll", onScroll, { passive: true, capture: true })
   window.addEventListener("resize", onResize, passive)
   window.addEventListener("deviceorientation", onOrientation, passive)
+  // Content that grows or shrinks changes how far the page scrolls, with no scroll or resize event.
+  if (typeof ResizeObserver !== "undefined") {
+    const content = new ResizeObserver(() => {
+      input.scrollMaxDirty = true
+      wake()
+    })
+    content.observe(document.documentElement)
+    if (document.body) content.observe(document.body)
+  }
   beforeFrame(sample)
 }
 
