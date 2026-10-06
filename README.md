@@ -3,7 +3,8 @@
 # Kinesis
 
 **[kinesisjs.com](https://kinesisjs.com)** · [Demos](https://kinesisjs.com/demos/) ·
-[Docs](https://kinesisjs.com/docs/) · [Playground](https://kinesisjs.com/playground/)
+[Docs](https://kinesisjs.com/docs/) · [Playground](https://kinesisjs.com/playground/) ·
+[Sponsor](https://github.com/sponsors/amineyarman)
 
 Interactive motion, written in CSS. Add `--k-tilt: 16deg` to a card and it tilts toward the
 pointer. Kinesis turns CSS variables into pointer, scroll, and touch interaction, animated with
@@ -139,6 +140,11 @@ Extras: `@amineyarman/kinesis/text` splits text into accessible, animatable char
 - **Small.** About 14 KB gzipped, with no dependencies.
 
 Docs, recipes, and a playground: https://kinesisjs.com. Design notes: [DESIGN.md](DESIGN.md).
+
+## Sponsor
+
+Kinesis is free and MIT licensed. If it saves you time, you can
+[sponsor its development](https://github.com/sponsors/amineyarman).
 
 ## License
 

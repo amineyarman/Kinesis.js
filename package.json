@@ -58,6 +58,10 @@
     "url": "git+https://github.com/amineyarman/Kinesis.js.git"
   },
   "homepage": "https://kinesisjs.com",
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/amineyarman"
+  },
   "scripts": {
     "dev": "vite --port 5173",
     "build": "vite build && vite build --config vite.global.config.ts && tsc -p tsconfig.build.json",
