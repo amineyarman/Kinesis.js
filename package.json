@@ -55,7 +55,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/amineyarman/Kinesis.js"
+    "url": "git+https://github.com/amineyarman/Kinesis.js.git"
   },
   "homepage": "https://kinesisjs.com",
   "scripts": {
