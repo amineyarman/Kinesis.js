@@ -1,7 +1,12 @@
+<img src=".github/logo.svg" width="56" height="56" alt="">
+
 # Kinesis
 
-Interactive motion for the web. Describe how elements react to the pointer, scroll, and touch,
-in CSS or JavaScript, and Kinesis handles the physics.
+Interactive motion, written in CSS. Add `--k-tilt: 16deg` to a card and it tilts toward the
+pointer. Kinesis turns CSS variables like this one into pointer, scroll, and touch interaction
+with spring physics, and every one of them works from JavaScript too.
+
+14 KB gzipped · no dependencies · CSS or JavaScript · MIT
 
 ```html
 <section data-kinesis>
@@ -22,8 +27,9 @@ import { initKinesis } from "@amineyarman/kinesis"
 initKinesis()
 ```
 
-That's the whole setup. Tokens, `calc()`, media queries, `:hover`, and dark-mode classes all work,
-because the browser resolves your CSS before Kinesis reads it.
+That's the whole setup. Kinesis registers each property with a type (a length, an angle, a color),
+so the browser computes its final value before Kinesis reads it. Design tokens, `calc()`, `em`
+units, media queries, `:hover`, and dark-mode classes all work with no extra code.
 
 ## Install
 
@@ -36,6 +42,9 @@ Or without a build step:
 ```html
 <script src="https://cdn.jsdelivr.net/npm/@amineyarman/kinesis/dist/kinesis.global.js"></script>
 ```
+
+Kinesis targets Chrome and Edge 111+, Safari 16.4+, and Firefox 128+. Older browsers get less
+motion or none, and the page keeps working.
 
 ## The vocabulary
 
@@ -110,8 +119,9 @@ Extras: `@amineyarman/kinesis/text` splits text into accessible, animatable char
   and composes with any values you set yourself.
 - **Accessible by default.** It respects `prefers-reduced-motion`, mirrors hover on keyboard focus,
   and keeps split text readable by screen readers.
-- **No idle cost.** Nothing runs while nothing moves; offscreen elements are skipped.
-- **Small.** About 14 KB gzipped.
+- **No idle cost.** One animation loop for the whole page, and it stops when nothing moves.
+  Offscreen elements are skipped. Scanning a page of 1,600 elements takes about 2 ms.
+- **Small.** About 14 KB gzipped, with no dependencies.
 
 Docs, recipes, and a playground: https://kinesisjs.com. Design notes: [DESIGN.md](DESIGN.md).
 
