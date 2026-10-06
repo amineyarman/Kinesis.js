@@ -1,0 +1,31 @@
+# Publishes to npm when a version tag is pushed, or on demand from the Actions tab.
+# Uses npm trusted publishing: no token is stored here. npm must list this workflow
+# (release.yml) as a trusted publisher for @amineyarman/kinesis.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or later.
+      - run: npm install -g npm@latest
+      - run: npm ci
+      - name: Check the tag matches package.json
+        if: github.ref_type == 'tag'
+        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+      # prepublishOnly runs the typecheck, the unit tests, and a fresh build.
+      - run: npm publish --access public
