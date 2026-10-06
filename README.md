@@ -1,12 +1,19 @@
-<img src=".github/logo.svg" width="56" height="56" alt="">
+<img src="https://kinesisjs.com/favicon.svg" width="56" height="56" alt="">
 
 # Kinesis
+
+**[kinesisjs.com](https://kinesisjs.com)** · [Demos](https://kinesisjs.com/demos/) ·
+[Docs](https://kinesisjs.com/docs/) · [Playground](https://kinesisjs.com/playground/)
 
 Interactive motion, written in CSS. Add `--k-tilt: 16deg` to a card and it tilts toward the
 pointer. Kinesis turns CSS variables into pointer, scroll, and touch interaction, animated with
 springs. The same properties work in JavaScript.
 
 14 KB gzipped · no dependencies · CSS or JavaScript · MIT
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/amineyarman/Kinesis.js/master/.github/media/tilt.gif" width="360" alt="A card tilting toward the pointer, its layers floating at different depths">
+</p>
 
 ```html
 <section data-kinesis>
@@ -62,6 +69,11 @@ motion or none, and the page keeps working.
 | `--k-depth: 40px` | sits above a tilted parent |
 | `--k-drag: both` | can be dragged, thrown, and snapped back |
 
+<p>
+  <img src="https://raw.githubusercontent.com/amineyarman/Kinesis.js/master/.github/media/field.gif" width="49%" alt="Dots moving away from the pointer and turning blue">
+  <img src="https://raw.githubusercontent.com/amineyarman/Kinesis.js/master/.github/media/rider.gif" width="49%" alt="A cyclist following the pointer, wheels rolling">
+</p>
+
 **Reactions**: pick a trigger with `--k-when`, then say what changes.
 
 ```css
@@ -70,6 +82,10 @@ motion or none, and the page keeps working.
 .card       { --k-when: hover; --k-y: -6px }
 .reveal     { --k-when: view once; --k-opacity: 0 1; --k-y: 40px 0 }
 ```
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/amineyarman/Kinesis.js/master/.github/media/dock.gif" width="440" alt="A dock whose icons grow as the pointer passes">
+</p>
 
 Triggers: `near`, `hover` (and keyboard focus), `press` (and Enter/Space), `view`,
 `scroll` (the element crossing the screen), `page` (document scroll).
