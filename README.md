@@ -3,8 +3,8 @@
 # Kinesis
 
 Interactive motion, written in CSS. Add `--k-tilt: 16deg` to a card and it tilts toward the
-pointer. Kinesis turns CSS variables like this one into pointer, scroll, and touch interaction
-with spring physics, and every one of them works from JavaScript too.
+pointer. Kinesis turns CSS variables into pointer, scroll, and touch interaction, animated with
+springs. The same properties work in JavaScript.
 
 14 KB gzipped · no dependencies · CSS or JavaScript · MIT
 
@@ -27,9 +27,8 @@ import { initKinesis } from "@amineyarman/kinesis"
 initKinesis()
 ```
 
-That's the whole setup. Kinesis registers each property with a type (a length, an angle, a color),
-so the browser computes its final value before Kinesis reads it. Design tokens, `calc()`, `em`
-units, media queries, `:hover`, and dark-mode classes all work with no extra code.
+That's the whole setup. Each property is registered with a type, so the browser computes its
+value first. Tokens, `calc()`, `em`, media queries, `:hover`, and dark mode work in them.
 
 ## Install
 
@@ -77,7 +76,7 @@ Triggers: `near`, `hover` (and keyboard focus), `press` (and Enter/Space), `view
 Outputs: `--k-x`, `--k-y`, `--k-rotate`, `--k-scale`, `--k-opacity`, `--k-blur`,
 `--k-color`, `--k-background`.
 
-Kinesis also writes `--k-progress`, so any CSS can react. A reading-progress bar:
+Kinesis writes `--k-progress` back for your own CSS. A reading-progress bar:
 
 ```css
 .bar { --k-when: page; scale: var(--k-progress) 1; transform-origin: left }
@@ -116,11 +115,11 @@ Extras: `@amineyarman/kinesis/text` splits text into accessible, animatable char
 ## Principles
 
 - **Your styles stay yours.** Kinesis writes `translate`, `rotate`, and `scale`, never `transform`,
-  and composes with any values you set yourself.
+  and adds to values you set.
 - **Accessible by default.** It respects `prefers-reduced-motion`, mirrors hover on keyboard focus,
   and keeps split text readable by screen readers.
-- **No idle cost.** One animation loop for the whole page, and it stops when nothing moves.
-  Offscreen elements are skipped. Scanning a page of 1,600 elements takes about 2 ms.
+- **No idle cost.** One animation loop for the page, stopped when nothing moves. Offscreen
+  elements are skipped. A 1,600-element page scans in about 2 ms.
 - **Small.** About 14 KB gzipped, with no dependencies.
 
 Docs, recipes, and a playground: https://kinesisjs.com. Design notes: [DESIGN.md](DESIGN.md).
