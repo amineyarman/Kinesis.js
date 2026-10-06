@@ -1,8 +1,6 @@
-# Stages a release on npm when a version tag is pushed, or on demand from the Actions tab.
+# Publishes to npm when a version tag is pushed, or on demand from the Actions tab.
 # Uses npm trusted publishing: no token is stored here. npm must list this workflow
-# (release.yml) as a trusted publisher for @amineyarman/kinesis.
-# A staged version goes live once a maintainer approves it with 2FA, on npmjs.com or
-# with `npm stage approve`.
+# (release.yml) as a trusted publisher for @amineyarman/kinesis, with npm publish allowed.
 name: Release
 
 on:
@@ -32,4 +30,4 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      - run: npm stage publish . --access public
+      - run: npm publish --access public
